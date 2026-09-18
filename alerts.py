@@ -80,6 +80,11 @@ S = json.loads(content)
 holdings = S.get("holdings", [])
 alerts = S.get("alerts", [])
 cash = float(S.get("cash", 0))
+today_str = now.strftime("%Y-%m-%d")
+rearmed = False
+for a in alerts:  # day-change alerts re-arm each trading day
+    if a.get("fired") and a.get("t", "").startswith("daypct") and a.get("firedD") and a["firedD"] != today_str:
+        a["fired"] = None; a["firedD"] = None; rearmed = True
 pending = [a for a in alerts if a.get("t", "").startswith("step") or not a.get("fired")]
 want_summary = os.environ.get("CLOSE_SUMMARY") == "1" and 960 <= minutes < 1020 and S.get("lastSummary") != now.strftime("%Y-%m-%d")
 if not pending and not want_summary:
@@ -179,7 +184,7 @@ for a in pending:
             hit = f"{s} is down {-q['dp']:.2f}% today at {money(q['c'])}"
     if hit:
         if not t.startswith("step"):
-            a["fired"] = stamp
+            a["fired"] = stamp; a["firedD"] = today_str
         messages.append(hit)
 
 if want_summary:
@@ -187,14 +192,14 @@ if want_summary:
     messages.append(f"Close: {money(total)} · today {signed(day)} ({pct(day / base * 100 if base else 0)}) · total gain {signed(inv - cost)}")
     S["lastSummary"] = today
 
-if not messages and not anchored:
+if not messages and not anchored and not rearmed:
     print("no alerts tripped")
     sys.exit(0)
 
 # ---------------------------------------------------------------- notify
 topic = env("NTFY_TOPIC"); server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 if not messages:
-    print("anchored new repeating alert(s)")
+    print("updated alert state (anchored/re-armed)")
 for m in messages:
     http(f"{server}/{topic}", {"Title": "Ledger", "Priority": "high", "Tags": "chart_with_upwards_trend"}, m.encode(), "POST")
     print("sent:", m)
