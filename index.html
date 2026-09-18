@@ -46,6 +46,23 @@ header{background:var(--paper);border-bottom:1px solid var(--line)}
 .dot.ext{background:#d29a1c}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(23,122,70,.45)}70%{box-shadow:0 0 0 7px rgba(23,122,70,0)}100%{box-shadow:0 0 0 0 rgba(23,122,70,0)}}
 @media (prefers-reduced-motion:reduce){.dot.open{animation:none}}
+.panels{display:none;grid-template-columns:1fr 1fr;gap:16px;padding:22px 0 16px}
+.panels.on{display:grid}
+.hero.off{display:none}
+.panel{border:1px solid var(--line);border-radius:var(--r-lg);padding:14px 18px 16px}
+.panel.live{border-color:#e6c57a;background:linear-gradient(180deg,#fffbf0,#fff)}
+.panel .ph{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:13px;color:var(--ink-2)}
+.panel .ph b{font-weight:600;color:var(--ink)}
+.panel.live .ph b{color:var(--warn)}
+.panel .big{font-family:var(--serif);font-size:34px;line-height:1.1;font-weight:500;letter-spacing:-.01em;margin-bottom:8px}
+.panel .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px 14px;font-size:13px}
+.panel .stats span{display:block;color:var(--ink-2);font-size:12px}
+.panel .stats b{font-weight:600;font-size:15px}
+.panel .syms{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.panel .syms>span{font-size:13px;padding:3px 9px;border:1px solid var(--line);border-radius:99px;background:#fff}
+.panel .syms b{font-weight:600}
+.panel .note{margin:8px 0 0}
+@media (max-width:760px){.panels{grid-template-columns:1fr;gap:10px;padding:14px 0 10px}.panel .big{font-size:28px}}
 .ext{display:none;border-top:1px solid var(--line);padding:12px 0 14px}
 .ext.on{display:block}
 .ext .head{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 22px;margin-bottom:8px}
@@ -192,7 +209,8 @@ tr.lotrow td{padding:4px 8px}
       <div class="stat"><span class="muted">Cash</span><b class="num" id="hCash">—</b></div>
       <div class="market"><span class="dot" id="mDot"></span><span id="mText">Market status</span><span class="sync" id="syncTxt"></span></div>
     </div>
-    <div class="ext" id="ext"></div>
+    <div class="panels" id="panels"></div>
+    <div class="ext" id="ext" style="display:none"></div>
     <nav id="nav">
       <button data-tab="holdings" class="on">Holdings</button>
       <button data-tab="projection">Projection</button>
@@ -448,12 +466,12 @@ function parseSnap(x,d){
   const lq=x.latestQuote;
   if(lq&&lq.bp>0&&lq.ap>0){ const qt=Math.floor(Date.parse(lq.t)/1000); if(qt>t+60&&(lq.ap-lq.bp)/lq.ap<0.01){ c=Math.round((lq.bp+lq.ap)*50)/100; t=qt; src='quote'; } }
   const db=x.dailyBar, pdb=x.prevDailyBar;
-  let pc=null, rc=null;
+  let pc=null, rc=null, ppc=null;
   if(db&&etParts(new Date(db.t)).d===d){ pc=pdb?pdb.c:null; rc=db.c; }
-  else if(db){ pc=db.c; }
+  else if(db){ pc=db.c; ppc=pdb?pdb.c:null; }
   else if(pdb){ pc=pdb.c; }
   if(pc==null) pc=c;
-  return {c,pc,d:c-pc,dp:pc?(c-pc)/pc*100:0,t,rc,src};
+  return {c,pc,ppc,d:c-pc,dp:pc?(c-pc)/pc*100:0,t,rc,src};
 }
 async function fetchQuotesAlpaca(syms){
   const d=today(), st=marketStatus();
@@ -464,7 +482,7 @@ async function fetchQuotesAlpaca(syms){
     const a=parseSnap(iex[s],d), b=sip?parseSnap(sip[s],d):null;
     let q=a;
     if(b&&(!a||b.t>a.t)){ q=b; q.src='delayed'; }
-    else if(a&&b){ if(b.rc!=null) a.rc=b.rc; if(b.pc!=null) a.pc=b.pc; a.d=a.c-a.pc; a.dp=a.pc?a.d/a.pc*100:0; } // consolidated closes are more accurate
+    else if(a&&b){ if(b.rc!=null) a.rc=b.rc; if(b.pc!=null) a.pc=b.pc; if(b.ppc!=null) a.ppc=b.ppc; a.d=a.c-a.pc; a.dp=a.pc?a.d/a.pc*100:0; } // consolidated closes are more accurate
     if(q) Q[s]=q;
   }
 }
@@ -538,41 +556,60 @@ function captureCloses(){
 function extInfo(){
   const st=marketStatus(); if(st.k!=='ext')return null;
   const pre=st.txt==='Pre-market', d=today();
-  let extChg=0,regChg=0,base=0,haveAll=true,anyExt=false,rows=[];
+  let extChg=0,regChg=0,base=0,haveAll=true,anyExt=false,haveReg=true,rows=[];
   for(const h of S.holdings){
-    const q=Q[h.t]; if(!q){haveAll=false;continue;}
+    const q=Q[h.t]; if(!q){haveAll=false;haveReg=false;continue;}
     const sh=shares(h);
-    // Has this quote actually traded in the current extended session?
     const qt=q.t?etParts(new Date(q.t*1000)):null;
     const traded=qt&&qt.d===d&&(pre?qt.m<570:qt.m>960);
     let ref;
-    if(!traded) ref=q.c;                                   // quote is still the last regular close
-    else if(pre) ref=q.pc;                                 // pre-market: vs yesterday's close
-    else if(C[h.t]&&C[h.t].d===d) ref=C[h.t].p;            // after hours: vs captured 4 pm close
-    else if(q.rc!=null) ref=q.rc;                          // or the provider's daily-bar close
+    if(!traded) ref=q.c;
+    else if(pre) ref=q.pc;
+    else if(C[h.t]&&C[h.t].d===d) ref=C[h.t].p;
+    else if(q.rc!=null) ref=q.rc;
     else {ref=q.pc; haveAll=false;}
     if(traded) anyExt=true;
-    const chg=(q.c-ref)*sh; extChg+=chg; base+=ref*sh; regChg+=(ref-q.pc)*sh;
-    rows.push({t:h.t,c:q.c,chg:q.c-ref,pct:ref?(q.c-ref)/ref*100:0,traded,when:q.t?fmtWhen(q.t):'',src:q.src});
+    const chg=(q.c-ref)*sh; extChg+=chg; base+=ref*sh;
+    // last regular session's change: today's close vs yesterday's (after hours), or yesterday's vs the day before (pre-market)
+    const prev=pre?q.ppc:q.pc;
+    if(prev!=null) regChg+=(ref-prev)*sh; else haveReg=false;
+    rows.push({t:h.t,c:q.c,close:ref,chg:q.c-ref,pct:ref?(q.c-ref)/ref*100:0,traded,when:q.t?fmtWhen(q.t):'',src:q.src});
   }
-  return {pre,extChg,extPct:base+S.cash?extChg/(base+S.cash)*100:0,regClose:base+S.cash,regChg,total:totals().total,haveAll,anyExt,rows};
+  const T=totals();
+  return {pre,extChg,extPct:base+S.cash?extChg/(base+S.cash)*100:0,regClose:base+S.cash,regChg,regPct:base+S.cash-regChg?regChg/(base+S.cash-regChg)*100:0,haveReg,
+          closeGain:base-T.cost,cost:T.cost,total:T.total,gain:T.gain,haveAll,anyExt,rows};
 }
 function fmtWhen(unix){ const dt=new Date(unix*1000), sameDay=etParts(dt).d===today();
   return dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+(sameDay?'':' '+dt.toLocaleDateString([],{month:'short',day:'numeric'})); }
 function renderExt(){
-  const el=$('#ext'), x=extInfo();
-  if(!x||!x.rows.length){el.className='ext';el.innerHTML='';return;}
-  el.className='ext on';
+  const el=$('#panels'), x=extInfo();
+  if(!x||!x.rows.length){el.className='panels';el.innerHTML='';$('.hero').classList.remove('off');return;}
+  $('.hero').classList.add('off'); el.className='panels on';
   const lbl=x.pre?'Pre-market':'After hours';
-  el.innerHTML=`<div class="head">
-      <span class="tag">${lbl}</span>
-      <span>Account now <b class="num">${money(x.total)}</b></span>
-      <span>${lbl} move <b class="num ${cls(x.extChg)}">${signed(x.extChg)} (${pct(x.extPct)})</b></span>
-      <span>${x.pre?'Yesterday\'s close':'Regular-session close'} <b class="num">${money(x.regClose)}</b></span>
+  const closeLbl=x.pre?'Yesterday\'s close':'Today\'s close';
+  el.innerHTML=`
+    <div class="panel">
+      <div class="ph"><b>${closeLbl}</b><span>regular session${x.pre?'':' · 4:00 PM ET'}</span></div>
+      <div class="big num">${money(x.regClose)}</div>
+      <div class="stats">
+        <div><span>Session change</span><b class="num ${cls(x.regChg)}">${x.haveReg?signed(x.regChg)+' ('+pct(x.regPct)+')':'—'}</b></div>
+        <div><span>Total gain at close</span><b class="num ${cls(x.closeGain)}">${signed(x.closeGain)} (${pct(x.cost?x.closeGain/x.cost*100:0)})</b></div>
+        <div><span>Cash</span><b class="num">${money(S.cash)}</b></div>
+      </div>
+      <div class="syms">${x.rows.map(r=>`<span><b>${esc(r.t)}</b> <span class="num">${money(r.close)}</span></span>`).join('')}</div>
     </div>
-    <div class="syms">${x.rows.map(r=>`<span title="${r.src==='quote'?'IEX bid/ask midpoint':r.src==='delayed'?'consolidated price, 15-minute delayed':'IEX last trade'} at ${esc(r.when)}"><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span> <span class="muted">${esc(r.when)}${r.src==='quote'?' mid':r.src==='delayed'?' ·15m':''}</span></span>`).join('')}</div>
-    ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported yet — prices shown are the last regular-session close. Extended-hours prices are consolidated data on a 15-minute delay (marked ·15m) or real-time IEX trades, whichever is fresher.</p>'}
-    ${x.haveAll?'':'<p class="note">Today\'s 4 pm close isn\'t available, so the after-hours move is measured from yesterday\'s close.</p>'}`;
+    <div class="panel live">
+      <div class="ph"><b>${lbl}</b><span>live · until ${x.pre?'9:30 AM':'8:00 PM'} ET</span></div>
+      <div class="big num">${money(x.total)}</div>
+      <div class="stats">
+        <div><span>${lbl} move</span><b class="num ${cls(x.extChg)}">${signed(x.extChg)} (${pct(x.extPct)})</b></div>
+        <div><span>Total gain now</span><b class="num ${cls(x.gain)}">${signed(x.gain)} (${pct(x.cost?x.gain/x.cost*100:0)})</b></div>
+        <div><span>Since prior close</span><b class="num ${cls(x.extChg+x.regChg)}">${x.pre?signed(x.extChg)+' ('+pct(x.extPct)+')':x.haveReg?signed(x.extChg+x.regChg):'—'}</b></div>
+      </div>
+      <div class="syms">${x.rows.map(r=>`<span title="${r.src==='quote'?'IEX bid/ask midpoint':r.src==='delayed'?'consolidated price, 15-minute delayed':'IEX last trade'} at ${esc(r.when)}"><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span> <span class="muted">${esc(r.when)}${r.src==='quote'?' mid':r.src==='delayed'?' ·15m':''}</span></span>`).join('')}</div>
+      ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported yet — showing the last close.</p>'}
+      ${x.haveAll?'':'<p class="note">Today\'s 4 pm close isn\'t available, so the after-hours move is measured from yesterday\'s close.</p>'}
+    </div>`;
 }
 
 /* ===================================================================
@@ -586,7 +623,6 @@ function render(){
   const g=$('#hGain'); g.textContent=`${signed(T.gain)} (${pct(T.cost?T.gain/T.cost*100:0)})`; g.className='num '+cls(T.gain);
   $('#hCash').textContent=money(S.cash);
   $('#mDot').className='dot '+st.k; $('#mText').textContent=st.txt;
-  const x=extInfo(); if(x&&!x.pre&&x.haveAll&&x.anyExt){ d.textContent=`${signed(x.regChg)} (${pct(x.regClose-x.regChg?x.regChg/(x.regClose-x.regChg)*100:0)})`; d.className='num '+cls(x.regChg); d.previousElementSibling.textContent='Regular session'; } else d.previousElementSibling.textContent='Today';
   renderExt();
 
   // setup notice
