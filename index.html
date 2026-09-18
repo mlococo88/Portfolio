@@ -298,7 +298,7 @@ tr.lotrow td{padding:4px 8px}
 <section class="tab" id="tab-alerts">
   <div class="card">
     <h2>Alerts</h2>
-    <p class="note">Checked on every price refresh while this page is open, and every 5 minutes by the GitHub checker when it isn't. Threshold alerts fire once and wait to be re-armed; "repeating" alerts fire each time the price moves the given amount from where it last notified you. Add your ntfy topic in Settings to get phone notifications from either path.</p>
+    <p class="note">Checked on every price refresh while this page is open, and every 5 minutes by the GitHub checker when it isn't. Price and account-total alerts fire once and wait to be re-armed; day-change alerts re-arm automatically each trading day; "repeating" alerts fire each time the price moves the given amount from where it last notified you. Add your ntfy topic in Settings to get phone notifications from either path.</p>
     <div class="grid g3" style="margin:12px 0">
       <label class="field">Symbol<select id="aSym"></select></label>
       <label class="field">Condition<select id="aType">
@@ -376,6 +376,7 @@ tr.lotrow td{padding:4px 8px}
   </div>
   <div class="card">
     <h2>Backup</h2>
+    <p class="note">The download holds holdings, cash, history, alerts and the projection plan — not your API keys or tokens.</p>
     <div class="row">
       <button class="btn" onclick="exportJSON()">Download JSON</button>
       <label class="btn">Import JSON<input type="file" accept="application/json" style="display:none" onchange="importJSON(this)"></label>
@@ -399,11 +400,7 @@ tr.lotrow td{padding:4px 8px}
 =================================================================== */
 const LS_KEY='ledger.v1';
 const SEED={
-  holdings:[
-    {t:'NVDA',name:'NVIDIA Corp',lots:[{d:'2026-01-01',q:35.501,p:199.11}]},
-    {t:'VOO',name:'Vanguard S&P 500 ETF',lots:[{d:'2026-01-01',q:4.617,p:638.61}]}
-  ],
-  cash:502.60, sold:[], alerts:[], log:[],
+  holdings:[], cash:0, sold:[], alerts:[], log:[],
   plan:{contribs:[],assume:{}},
   cfg:{provider:'alpaca',finnhub:'',alpacaKey:'',alpacaSecret:'',gistToken:'',gistId:'',ntfy:'',refresh:30,proj:{years:20,target:0,scen:'base'}},
   updatedAt:0
@@ -411,7 +408,7 @@ const SEED={
 let S=load();
 let Q={};          // quotes by symbol
 let M={};          // 52wk metrics by symbol {hi,lo,at}
-let timer=null, syncTimer=null, openLots={}, lastPull=0;
+let timer=null, syncTimer=null, openLots={}, lastPull=0, pullDone=false;
 let PCC={}; try{PCC=JSON.parse(sessionStorage.getItem('ledger.pcc')||'{}');}catch(e){}
 
 function load(){
@@ -424,6 +421,7 @@ function save(sync=true){
   render();
   if(sync) queueSync();
 }
+function saveLocal(){ localStorage.setItem(LS_KEY,JSON.stringify(S)); render(); } // settings only: no timestamp, no push
 
 /* ===================================================================
    HELPERS
@@ -452,8 +450,11 @@ function totals(){
 /* ===================================================================
    MARKET STATUS (US Eastern)
 =================================================================== */
+const HOLIDAYS=new Set(['2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25','2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25',
+  '2027-01-01','2027-01-18','2027-02-15','2027-03-26','2027-05-31','2027-06-18','2027-07-05','2027-09-06','2027-11-25','2027-12-24']);
 function marketStatus(){
   const now=new Date();
+  if(HOLIDAYS.has(today())) return {k:'closed',txt:'Market closed · holiday'};
   const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'short',hour:'numeric',minute:'numeric',hour12:false}).formatToParts(now);
   const g=t=>parts.find(p=>p.type===t).value;
   const wd=g('weekday'), m=(+g('hour')%24)*60+ +g('minute');
@@ -751,7 +752,7 @@ function renderSettings(){
   S.cfg.provider=$('#sProv').value; S.cfg.finnhub=$('#sKey').value.trim(); S.cfg.alpacaKey=$('#sAKey').value.trim(); S.cfg.alpacaSecret=$('#sASec').value.trim();
   S.cfg.refresh=Math.max(5,+$('#sRefresh').value||30); S.cfg.gistToken=$('#sTok').value.trim(); S.cfg.gistId=$('#sGist').value.trim(); S.cfg.ntfy=$('#sNtfy').value.trim();
   if(id==='sProv'){ Q={}; M={}; }
-  save(false); schedule(); if(['sProv','sKey','sAKey','sASec'].includes(id)) refreshQuotes(); if(id==='sTok'||id==='sGist') syncPull();
+  saveLocal(); schedule(); if(['sProv','sKey','sAKey','sASec'].includes(id)) refreshQuotes(); if(id==='sTok'||id==='sGist') syncPull(false);
 }));
 ['pYears','pTarget','pScen'].forEach(id=>$('#'+id).addEventListener('input',()=>{
   const p=S.cfg.proj; p.years=Math.min(50,Math.max(1,+$('#pYears').value||1)); p.target=+$('#pTarget').value||0; p.scen=$('#pScen').value;
@@ -778,7 +779,7 @@ function openTrade(t,side){
       <label class="field">Date<input id="tDate" type="date" value="${today()}"></label>
       <label class="field">Deduct from cash?<select id="tCash"><option value="1">Yes</option><option value="0">No</option></select></label>
     </div>
-    <div class="preview" id="tPrev">Enter shares and price.</div>
+    <div class="preview" id="tPrev">Enter an amount and price.</div>
     <div class="foot"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="commitTrade('${side}',${isNew?'null':`'${t}'`})">${side==='buy'?'Record purchase':'Record sale'}</button></div>`);
   const upd=()=>{
     const {qy,px,amt}=tradeVals();
@@ -808,7 +809,7 @@ async function commitTrade(side,t){
   let h;
   if(side==='buy'){
     if(t) h=S.holdings.find(x=>x.t===t);
-    else { const sym=$('#tSym').value.trim().toUpperCase(); if(!sym) return alert('Enter a symbol.'); h=S.holdings.find(x=>x.t===sym); if(!h){h={t:sym,name:($('#tName').value||'').trim(),lots:[]};S.holdings.push(h); if(!h.name) lookupName(sym).then(n=>{if(n){h.name=n;save(false);}}); } }
+    else { const sym=$('#tSym').value.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,''); if(!sym) return alert('Enter a symbol.'); h=S.holdings.find(x=>x.t===sym); if(!h){h={t:sym,name:($('#tName').value||'').trim(),lots:[]};S.holdings.push(h); if(!h.name) lookupName(sym).then(n=>{if(n){h.name=n;save(false);}}); } }
     h.lots.push({d,q:qy,p:px});
     if(useCash) S.cash=Math.round((S.cash-qy*px)*100)/100;
   } else {
@@ -890,6 +891,7 @@ function checkAlerts(){
       const mv=q.c-a.anchor, ok=a.t==='step_usd'?Math.abs(mv)>=a.v:Math.abs(mv)/a.anchor*100>=a.v;
       if(ok){ msg=`${a.s} ${mv>0?'up':'down'} ${a.t==='step_usd'?money(Math.abs(mv)):fmt(Math.abs(mv)/a.anchor*100)+'%'} to ${money(q.c)} (from ${money(a.anchor)})`; a.anchor=q.c; a.last=stamp(); a.count=(a.count||0)+1; hit=true; }
     } else {
+      if(a.fired&&a.t.startsWith('daypct')&&a.firedD&&a.firedD!==today()){ a.fired=null; a.firedD=null; changed=true; }
       if(a.fired)continue;
       if(a.t==='total_above'&&T.total>a.v){hit=true;msg=`Account total is ${money(T.total)}, above ${money(a.v)}`;}
       else if(a.t==='total_below'&&T.total<a.v){hit=true;msg=`Account total is ${money(T.total)}, below ${money(a.v)}`;}
@@ -900,7 +902,7 @@ function checkAlerts(){
         if(a.t==='daypct_up'&&q.dp>a.v){hit=true;msg=`${a.s} is up ${fmt(q.dp)}% today`;}
         if(a.t==='daypct_dn'&&q.dp<-a.v){hit=true;msg=`${a.s} is down ${fmt(-q.dp)}% today`;}
       }
-      if(hit) a.fired=stamp();
+      if(hit){ a.fired=stamp(); a.firedD=today(); }
     }
     if(hit){ changed=true; notify(msg); }
   }
@@ -928,7 +930,8 @@ function delSold(i){ if(confirm('Remove this record? Holdings and cash are not c
 function logValue(){
   const T=totals(); if(!T.priced)return;
   const d=today(); const last=S.log[S.log.length-1];
-  if(last&&last.d===d) last.v=T.total; else S.log.push({d,v:T.total});
+  const st=marketStatus().k;
+  if(last&&last.d===d){ if(st==='open'||!last.reg){ last.v=T.total; if(st==='open') last.reg=1; } } else S.log.push({d,v:T.total,reg:st==='open'?1:0});
   if(S.log.length>2000) S.log.splice(0,S.log.length-2000);
   localStorage.setItem(LS_KEY,JSON.stringify(S));
 }
@@ -960,11 +963,11 @@ function addContrib(){ S.plan.contribs.push({id:Date.now(),t:S.holdings[0]?S.hol
 function delContrib(id){ S.plan.contribs=S.plan.contribs.filter(c=>c.id!==id); save(); }
 function updContrib(id,k,v){ const c=S.plan.contribs.find(c=>c.id===id); if(!c)return; c[k]=k==='amt'?(+v||0):v; localStorage.setItem(LS_KEY,JSON.stringify(S)); queueSync(); renderProj(); }
 function renderContribs(){
-  const el=$('#contribs'); const opts=[...S.holdings.map(h=>h.t),'CASH'];
+  const el=$('#contribs'); const opts=[...S.holdings.map(h=>h.t),'CASH']; for(const c of S.plan.contribs) if(!opts.includes(c.t)) opts.push(c.t);
   if(!S.plan.contribs.length){el.innerHTML='<p class="muted" style="margin:6px 0 0">No recurring investments yet. Add one to model your automatic buys.</p>';return;}
   const monthly=S.plan.contribs.reduce((a,c)=>a+c.amt*FREQ[c.freq].pm,0);
   el.innerHTML=S.plan.contribs.map(c=>`<div class="crow">
-    <label class="field">Into<select onchange="updContrib(${c.id},'t',this.value)">${opts.map(o=>`<option ${o===c.t?'selected':''}>${esc(o)}</option>`).join('')}</select></label>
+    <label class="field">Into<select onchange="updContrib(${c.id},'t',this.value)">${opts.map(o=>`<option value="${esc(o)}" ${o===c.t?'selected':''}>${esc(o)}${o!=='CASH'&&!S.holdings.some(h=>h.t===o)?' (not held)':''}</option>`).join('')}</select></label>
     <label class="field">Amount ($)<input type="number" step="1" value="${c.amt}" onchange="updContrib(${c.id},'amt',this.value)"></label>
     <label class="field">Frequency<select onchange="updContrib(${c.id},'freq',this.value)">${Object.keys(FREQ).map(f=>`<option value="${f}" ${f===c.freq?'selected':''}>${FREQ[f].l}</option>`).join('')}</select></label>
     <label class="field">Starts<input type="date" value="${c.start||''}" onchange="updContrib(${c.id},'start',this.value)"></label>
@@ -1074,7 +1077,7 @@ function monteCarlo(P,paths){
 /* ---- render ---- */
 function renderProj(){
   if(!$('#tab-projection').classList.contains('on'))return;
-  renderContribs(); renderAssume();
+  const ae=document.activeElement; if(!(ae&&ae.closest('#contribs,#assumeTbl'))){ renderContribs(); renderAssume(); }
   const p=S.cfg.proj, scen=p.scen||'base', N=p.years*12;
   const B=project('base'), Cn=project('cons'), Hs=project('hist'), P={base:B,cons:Cn,hist:Hs}[scen];
   const mc=monteCarlo(P,500);
@@ -1117,7 +1120,7 @@ function renderProj(){
 const GH='https://api.github.com';
 function ghHeaders(){return {'Authorization':'Bearer '+S.cfg.gistToken,'Accept':'application/vnd.github+json','Content-Type':'application/json'};}
 function setSync(t,err){ $('#syncTxt').textContent=t; $('#syncTxt').className='sync'+(err?' err':''); $('#syncStatus').textContent=t; }
-function queueSync(){ if(!S.cfg.gistToken)return; clearTimeout(syncTimer); syncTimer=setTimeout(()=>syncPush(false),2500); }
+function queueSync(){ if(!S.cfg.gistToken)return; clearTimeout(syncTimer); syncTimer=setTimeout(()=>{ if(!pullDone&&S.cfg.gistId){queueSync();return;} syncPush(false); },2500); }
 function payload(){ const {holdings,cash,sold,alerts,log,plan,updatedAt}=S; const cfg={proj:S.cfg.proj,refresh:S.cfg.refresh,ntfy:S.cfg.ntfy||''}; return JSON.stringify({holdings,cash,sold,alerts,log,plan,updatedAt,cfg},null,1); }
 async function syncPush(manual){
   if(!S.cfg.gistToken){ if(manual)setSync('Add a GitHub token first',true); return; }
@@ -1149,14 +1152,15 @@ async function syncPull(manual){
       setSync('Pulled '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}));
     } else setSync('Up to date');
   }catch(e){ setSync(e.message,true); }
+  pullDone=true;
 }
 
 /* ===================================================================
    BACKUP
 =================================================================== */
-function exportJSON(){ const a=document.createElement('a'); a.href='data:application/json,'+encodeURIComponent(JSON.stringify(S,null,1)); a.download='ledger-'+today()+'.json'; a.click(); }
+function exportJSON(){ const {cfg,...data}=S; data.cfg={proj:cfg.proj,refresh:cfg.refresh,ntfy:cfg.ntfy}; const a=document.createElement('a'); a.href='data:application/json,'+encodeURIComponent(JSON.stringify(data,null,1)); a.download='ledger-'+today()+'.json'; a.click(); }
 function importJSON(inp){ const f=inp.files[0]; if(!f)return; const rd=new FileReader(); rd.onload=()=>{ try{ const j=JSON.parse(rd.result); if(!j.holdings) throw 0; const keep=S.cfg; S=Object.assign(JSON.parse(JSON.stringify(SEED)),j); S.cfg=Object.assign({},keep,{proj:(j.cfg&&j.cfg.proj)||keep.proj}); save(); refreshQuotes(); }catch(e){alert('That file is not a Ledger backup.');} }; rd.readAsText(f); inp.value=''; }
-function resetAll(){ if(confirm('Erase all holdings, alerts, history and settings from this browser? The Gist is not touched.')){localStorage.removeItem(LS_KEY);location.reload();} }
+function resetAll(){ if(confirm('Erase all data and settings from this browser? The Gist is not touched, so you can pull it back after re-entering the token and Gist ID.')){localStorage.removeItem(LS_KEY);location.reload();} }
 
 /* ===================================================================
    NAV + BOOT
@@ -1164,8 +1168,9 @@ function resetAll(){ if(confirm('Erase all holdings, alerts, history and setting
 function showTab(id){ document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===id)); document.querySelectorAll('section.tab').forEach(s=>s.classList.toggle('on',s.id==='tab-'+id)); if(id==='projection'){renderProj();fetchHistory(false);} }
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
 try{M=JSON.parse(sessionStorage.getItem('ledger.metrics')||'{}');}catch(e){}
-render(); schedule(); refreshQuotes(); syncPull(false);
-setInterval(()=>{ $('#mDot').className='dot '+marketStatus().k; $('#mText').textContent=marketStatus().txt; },60000);
+render(); schedule(); (async()=>{ if(S.cfg.gistToken&&S.cfg.gistId) await syncPull(false); else pullDone=true; refreshQuotes(); })();
+let lastK=marketStatus().k;
+setInterval(()=>{ const st=marketStatus(); if(st.k!==lastK){ lastK=st.k; refreshQuotes(); } $('#mDot').className='dot '+st.k; $('#mText').textContent=st.txt; },60000);
 </script>
 </body>
 </html>
