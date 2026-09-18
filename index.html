@@ -447,14 +447,17 @@ async function fetchQuotesAlpaca(syms){
   const d=today();
   for(const s of syms){
     const x=j[s]; if(!x||!x.latestTrade) continue;
-    const c=x.latestTrade.p, t=Math.floor(Date.parse(x.latestTrade.t)/1000);
+    let c=x.latestTrade.p, t=Math.floor(Date.parse(x.latestTrade.t)/1000), src='trade';
+    // In thin extended sessions the bid/ask midpoint is often fresher than the last trade
+    const lq=x.latestQuote;
+    if(lq&&lq.bp>0&&lq.ap>0){ const qt=Math.floor(Date.parse(lq.t)/1000); if(qt>t+60&&(lq.ap-lq.bp)/lq.ap<0.01){ c=Math.round((lq.bp+lq.ap)*50)/100; t=qt; src='quote'; } }
     const db=x.dailyBar, pdb=x.prevDailyBar;
     let pc=null, rc=null;
     if(db&&etParts(new Date(db.t)).d===d){ pc=pdb?pdb.c:null; rc=db.c; }   // today's bar exists
     else if(db){ pc=db.c; }                                                  // session hasn't rolled: daily bar is yesterday
     else if(pdb){ pc=pdb.c; }
     if(pc==null) pc=c;
-    Q[s]={c,pc,d:c-pc,dp:pc?(c-pc)/pc*100:0,t,rc};
+    Q[s]={c,pc,d:c-pc,dp:pc?(c-pc)/pc*100:0,t,rc,src};
   }
 }
 async function refreshQuotes(manual){
@@ -542,10 +545,12 @@ function extInfo(){
     else {ref=q.pc; haveAll=false;}
     if(traded) anyExt=true;
     const chg=(q.c-ref)*sh; extChg+=chg; base+=ref*sh; regChg+=(ref-q.pc)*sh;
-    rows.push({t:h.t,c:q.c,chg:q.c-ref,pct:ref?(q.c-ref)/ref*100:0,traded});
+    rows.push({t:h.t,c:q.c,chg:q.c-ref,pct:ref?(q.c-ref)/ref*100:0,traded,when:q.t?fmtWhen(q.t):'',src:q.src});
   }
   return {pre,extChg,extPct:base+S.cash?extChg/(base+S.cash)*100:0,regClose:base+S.cash,regChg,total:totals().total,haveAll,anyExt,rows};
 }
+function fmtWhen(unix){ const dt=new Date(unix*1000), sameDay=etParts(dt).d===today();
+  return dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+(sameDay?'':' '+dt.toLocaleDateString([],{month:'short',day:'numeric'})); }
 function renderExt(){
   const el=$('#ext'), x=extInfo();
   if(!x||!x.rows.length){el.className='ext';el.innerHTML='';return;}
@@ -557,7 +562,7 @@ function renderExt(){
       <span>${lbl} move <b class="num ${cls(x.extChg)}">${signed(x.extChg)} (${pct(x.extPct)})</b></span>
       <span>${x.pre?'Yesterday\'s close':'Regular-session close'} <b class="num">${money(x.regClose)}</b></span>
     </div>
-    <div class="syms">${x.rows.map(r=>`<span><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span></span>`).join('')}</div>
+    <div class="syms">${x.rows.map(r=>`<span title="${r.src==='quote'?'bid/ask midpoint':'last trade'} at ${esc(r.when)}"><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span> <span class="muted">${esc(r.when)}${r.src==='quote'?' mid':''}</span></span>`).join('')}</div>
     ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported yet — prices shown are the last regular-session close.</p>'}
     ${x.haveAll?'':'<p class="note">Today\'s 4 pm close isn\'t available, so the after-hours move is measured from yesterday\'s close.</p>'}`;
 }
