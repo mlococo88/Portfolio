@@ -275,7 +275,7 @@ tr.lotrow td{padding:4px 8px}
 <section class="tab" id="tab-alerts">
   <div class="card">
     <h2>Alerts</h2>
-    <p class="note">Checked on every price refresh while this page is open. If you allow notifications, the app will also post a system notification. Alerts don't run while the page is closed.</p>
+    <p class="note">Checked on every price refresh while this page is open, and every 15 minutes by the GitHub checker when it isn't. Threshold alerts fire once and wait to be re-armed; "repeating" alerts fire each time the price moves the given amount from where it last notified you. Add your ntfy topic in Settings to get phone notifications from either path.</p>
     <div class="grid g3" style="margin:12px 0">
       <label class="field">Symbol<select id="aSym"></select></label>
       <label class="field">Condition<select id="aType">
@@ -283,6 +283,8 @@ tr.lotrow td{padding:4px 8px}
         <option value="below">Price falls below</option>
         <option value="daypct_up">Day change exceeds +%</option>
         <option value="daypct_dn">Day change falls below −%</option>
+        <option value="step_usd">Every $ move of (repeating)</option>
+        <option value="step_pct">Every % move of (repeating)</option>
         <option value="total_above">Account total rises above</option>
         <option value="total_below">Account total falls below</option>
       </select></label>
@@ -345,6 +347,11 @@ tr.lotrow td{padding:4px 8px}
     </div>
   </div>
   <div class="card">
+    <h2>Phone notifications</h2>
+    <p class="note">Install the ntfy app and subscribe to a private topic; enter the same topic here (and as the NTFY_TOPIC secret for the GitHub checker). Alerts that fire while the app is open are then pushed to your phone too.</p>
+    <div class="grid g2"><label class="field">ntfy topic<input id="sNtfy" autocomplete="off" placeholder="e.g. ledger-abc123"></label></div>
+  </div>
+  <div class="card">
     <h2>Backup</h2>
     <div class="row">
       <button class="btn" onclick="exportJSON()">Download JSON</button>
@@ -374,7 +381,7 @@ const SEED={
     {t:'VOO',name:'Vanguard S&P 500 ETF',lots:[{d:'2026-01-01',q:4.617,p:638.61}]}
   ],
   cash:502.60, sold:[], alerts:[], log:[],
-  cfg:{provider:'alpaca',finnhub:'',alpacaKey:'',alpacaSecret:'',gistToken:'',gistId:'',refresh:30,proj:{monthly:500,ret:8,vol:16,years:20,target:0}},
+  cfg:{provider:'alpaca',finnhub:'',alpacaKey:'',alpacaSecret:'',gistToken:'',gistId:'',ntfy:'',refresh:30,proj:{monthly:500,ret:8,vol:16,years:20,target:0}},
   updatedAt:0
 };
 let S=load();
@@ -712,13 +719,13 @@ function renderAlloc(T){
 }
 function renderSettings(){
   if(document.activeElement&&document.activeElement.closest('#tab-settings,#tab-projection'))return;
-  $('#sProv').value=S.cfg.provider||'alpaca'; $('#sKey').value=S.cfg.finnhub; $('#sAKey').value=S.cfg.alpacaKey||''; $('#sASec').value=S.cfg.alpacaSecret||''; $('#sRefresh').value=S.cfg.refresh; $('#sTok').value=S.cfg.gistToken; $('#sGist').value=S.cfg.gistId;
+  $('#sProv').value=S.cfg.provider||'alpaca'; $('#sKey').value=S.cfg.finnhub; $('#sAKey').value=S.cfg.alpacaKey||''; $('#sASec').value=S.cfg.alpacaSecret||''; $('#sRefresh').value=S.cfg.refresh; $('#sTok').value=S.cfg.gistToken; $('#sGist').value=S.cfg.gistId; $('#sNtfy').value=S.cfg.ntfy||'';
   $('#provAlpaca').style.display=S.cfg.provider==='finnhub'?'none':''; $('#provFinnhub').style.display=S.cfg.provider==='finnhub'?'':'none';
   const p=S.cfg.proj; $('#pMonthly').value=p.monthly; $('#pRet').value=p.ret; $('#pVol').value=p.vol; $('#pYears').value=p.years; $('#pTarget').value=p.target||'';
 }
-['sProv','sKey','sAKey','sASec','sRefresh','sTok','sGist'].forEach(id=>$('#'+id).addEventListener('change',()=>{
+['sProv','sKey','sAKey','sASec','sRefresh','sTok','sGist','sNtfy'].forEach(id=>$('#'+id).addEventListener('change',()=>{
   S.cfg.provider=$('#sProv').value; S.cfg.finnhub=$('#sKey').value.trim(); S.cfg.alpacaKey=$('#sAKey').value.trim(); S.cfg.alpacaSecret=$('#sASec').value.trim();
-  S.cfg.refresh=Math.max(5,+$('#sRefresh').value||30); S.cfg.gistToken=$('#sTok').value.trim(); S.cfg.gistId=$('#sGist').value.trim();
+  S.cfg.refresh=Math.max(5,+$('#sRefresh').value||30); S.cfg.gistToken=$('#sTok').value.trim(); S.cfg.gistId=$('#sGist').value.trim(); S.cfg.ntfy=$('#sNtfy').value.trim();
   if(id==='sProv'){ Q={}; M={}; }
   save(false); schedule(); if(['sProv','sKey','sAKey','sASec'].includes(id)) refreshQuotes(); if(id==='sTok'||id==='sGist') syncPull();
 }));
@@ -829,14 +836,20 @@ function renderAlerts(){
   if([...sel.options].some(o=>o.value===cur)) sel.value=cur;
   $('#notifBtn').textContent=('Notification' in window)?(Notification.permission==='granted'?'Notifications on':Notification.permission==='denied'?'Notifications blocked':'Allow notifications'):'Notifications unsupported';
   $('#notifBtn').disabled=!('Notification' in window)||Notification.permission!=='default';
-  const L={above:'rises above',below:'falls below',daypct_up:'day change above +',daypct_dn:'day change below −',total_above:'account rises above',total_below:'account falls below'};
-  $('#alist').innerHTML=S.alerts.length?S.alerts.map(a=>`<li><span>${a.t.startsWith('total')?'':'<b>'+esc(a.s)+'</b> '}${L[a.t]} <b class="num">${a.t.includes('pct')?fmt(a.v)+'%':money(a.v)}</b> ${a.fired?`<span class="chip warn">fired ${esc(a.fired)}</span>`:'<span class="chip">watching</span>'}</span><span class="acts">${a.fired?`<button class="btn sm" onclick="rearm(${a.id})">Re-arm</button>`:''}<button class="btn sm danger" onclick="delAlert(${a.id})">Remove</button></span></li>`).join(''):'<li class="muted">No alerts yet.</li>';
+  const L={above:'rises above',below:'falls below',daypct_up:'day change above +',daypct_dn:'day change below −',step_usd:'every move of',step_pct:'every move of',total_above:'account rises above',total_below:'account falls below'};
+  $('#alist').innerHTML=S.alerts.length?S.alerts.map(a=>{
+    const step=a.t.startsWith('step');
+    const val=a.t.includes('pct')?fmt(a.v)+'%':money(a.v);
+    const status=step?`<span class="chip">repeating${a.anchor?' · from '+money(a.anchor):''}</span>${a.last?` <span class="muted">last ${esc(a.last)}${a.count>1?' ('+a.count+'×)':''}</span>`:''}`
+                     :(a.fired?`<span class="chip warn">fired ${esc(a.fired)}</span>`:'<span class="chip">watching</span>');
+    return `<li><span>${a.t.startsWith('total')?'':'<b>'+esc(a.s)+'</b> '}${L[a.t]} <b class="num">${val}</b> ${status}</span><span class="acts">${a.fired?`<button class="btn sm" onclick="rearm(${a.id})">Re-arm</button>`:''}<button class="btn sm danger" onclick="delAlert(${a.id})">Remove</button></span></li>`;
+  }).join(''):'<li class="muted">No alerts yet.</li>';
 }
 function addAlert(){
   const s=$('#aSym').value, t=$('#aType').value, v=+$('#aVal').value;
   if(!(v>0)) return alert('Enter a value.');
   if(t.startsWith('total')) S.alerts.push({id:Date.now(),t,v,fired:null});
-  else { if(s==='__acct') return alert('Pick a symbol for price alerts.'); S.alerts.push({id:Date.now(),s,t,v,fired:null}); }
+  else { if(s==='__acct') return alert('Pick a symbol for price alerts.'); const a={id:Date.now(),s,t,v,fired:null}; if(t.startsWith('step')) a.anchor=Q[s]?Q[s].c:null; S.alerts.push(a); }
   $('#aVal').value=''; save();
 }
 function delAlert(id){S.alerts=S.alerts.filter(a=>a.id!==id);save();}
@@ -844,21 +857,35 @@ function rearm(id){const a=S.alerts.find(a=>a.id===id);if(a)a.fired=null;save();
 function askNotif(){ if('Notification' in window) Notification.requestPermission().then(()=>renderAlerts()); }
 function checkAlerts(){
   const T=totals(); let changed=false;
+  const stamp=()=>new Date().toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
   for(const a of S.alerts){
-    if(a.fired)continue;
     let hit=false,msg='';
-    if(a.t==='total_above'&&T.total>a.v){hit=true;msg=`Account total is ${money(T.total)}, above ${money(a.v)}`;}
-    else if(a.t==='total_below'&&T.total<a.v){hit=true;msg=`Account total is ${money(T.total)}, below ${money(a.v)}`;}
-    else if(a.s&&Q[a.s]){
-      const q=Q[a.s];
-      if(a.t==='above'&&q.c>a.v){hit=true;msg=`${a.s} is ${money(q.c)}, above ${money(a.v)}`;}
-      if(a.t==='below'&&q.c<a.v){hit=true;msg=`${a.s} is ${money(q.c)}, below ${money(a.v)}`;}
-      if(a.t==='daypct_up'&&q.dp>a.v){hit=true;msg=`${a.s} is up ${fmt(q.dp)}% today`;}
-      if(a.t==='daypct_dn'&&q.dp<-a.v){hit=true;msg=`${a.s} is down ${fmt(-q.dp)}% today`;}
+    if(a.t.startsWith('step')){
+      const q=a.s&&Q[a.s]; if(!q)continue;
+      if(a.anchor==null){ a.anchor=q.c; changed=true; continue; }
+      const mv=q.c-a.anchor, ok=a.t==='step_usd'?Math.abs(mv)>=a.v:Math.abs(mv)/a.anchor*100>=a.v;
+      if(ok){ msg=`${a.s} ${mv>0?'up':'down'} ${a.t==='step_usd'?money(Math.abs(mv)):fmt(Math.abs(mv)/a.anchor*100)+'%'} to ${money(q.c)} (from ${money(a.anchor)})`; a.anchor=q.c; a.last=stamp(); a.count=(a.count||0)+1; hit=true; }
+    } else {
+      if(a.fired)continue;
+      if(a.t==='total_above'&&T.total>a.v){hit=true;msg=`Account total is ${money(T.total)}, above ${money(a.v)}`;}
+      else if(a.t==='total_below'&&T.total<a.v){hit=true;msg=`Account total is ${money(T.total)}, below ${money(a.v)}`;}
+      else if(a.s&&Q[a.s]){
+        const q=Q[a.s];
+        if(a.t==='above'&&q.c>a.v){hit=true;msg=`${a.s} is ${money(q.c)}, above ${money(a.v)}`;}
+        if(a.t==='below'&&q.c<a.v){hit=true;msg=`${a.s} is ${money(q.c)}, below ${money(a.v)}`;}
+        if(a.t==='daypct_up'&&q.dp>a.v){hit=true;msg=`${a.s} is up ${fmt(q.dp)}% today`;}
+        if(a.t==='daypct_dn'&&q.dp<-a.v){hit=true;msg=`${a.s} is down ${fmt(-q.dp)}% today`;}
+      }
+      if(hit) a.fired=stamp();
     }
-    if(hit){ a.fired=new Date().toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); changed=true; banner(msg); if('Notification' in window&&Notification.permission==='granted'){try{new Notification('Ledger',{body:msg});}catch(e){}} }
+    if(hit){ changed=true; notify(msg); }
   }
-  if(changed){ localStorage.setItem(LS_KEY,JSON.stringify(S)); queueSync(); }
+  if(changed){ localStorage.setItem(LS_KEY,JSON.stringify(S)); queueSync(); renderAlerts(); }
+}
+function notify(msg){
+  banner(msg);
+  if('Notification' in window&&Notification.permission==='granted'){try{new Notification('Ledger',{body:msg});}catch(e){}}
+  if(S.cfg.ntfy){ fetch('https://ntfy.sh/'+encodeURIComponent(S.cfg.ntfy),{method:'POST',body:msg,headers:{'Title':'Ledger','Priority':'high','Tags':'chart_with_upwards_trend'}}).catch(()=>{}); }
 }
 function banner(msg){ const h=$('#bannerHost'); h.innerHTML=`<div class="banner"><span>${esc(msg)}</span><button onclick="this.parentNode.remove()" aria-label="Dismiss">×</button></div>`; setTimeout(()=>{const b=h.querySelector('.banner');if(b)b.remove();},12000); }
 
@@ -945,7 +972,7 @@ const GH='https://api.github.com';
 function ghHeaders(){return {'Authorization':'Bearer '+S.cfg.gistToken,'Accept':'application/vnd.github+json','Content-Type':'application/json'};}
 function setSync(t,err){ $('#syncTxt').textContent=t; $('#syncTxt').className='sync'+(err?' err':''); $('#syncStatus').textContent=t; }
 function queueSync(){ if(!S.cfg.gistToken)return; clearTimeout(syncTimer); syncTimer=setTimeout(()=>syncPush(false),2500); }
-function payload(){ const {holdings,cash,sold,alerts,log,updatedAt}=S; const cfg={proj:S.cfg.proj,refresh:S.cfg.refresh}; return JSON.stringify({holdings,cash,sold,alerts,log,updatedAt,cfg},null,1); }
+function payload(){ const {holdings,cash,sold,alerts,log,updatedAt}=S; const cfg={proj:S.cfg.proj,refresh:S.cfg.refresh,ntfy:S.cfg.ntfy||''}; return JSON.stringify({holdings,cash,sold,alerts,log,updatedAt,cfg},null,1); }
 async function syncPush(manual){
   if(!S.cfg.gistToken){ if(manual)setSync('Add a GitHub token first',true); return; }
   try{
@@ -971,7 +998,7 @@ async function syncPull(manual){
     const remote=JSON.parse(txt);
     if(manual||(remote.updatedAt||0)>(S.updatedAt||0)){
       Object.assign(S,{holdings:remote.holdings||[],cash:remote.cash||0,sold:remote.sold||[],alerts:remote.alerts||[],log:remote.log||[],updatedAt:remote.updatedAt||0});
-      if(remote.cfg){ if(remote.cfg.proj)S.cfg.proj=Object.assign({},S.cfg.proj,remote.cfg.proj); if(remote.cfg.refresh)S.cfg.refresh=remote.cfg.refresh; }
+      if(remote.cfg){ if(remote.cfg.proj)S.cfg.proj=Object.assign({},S.cfg.proj,remote.cfg.proj); if(remote.cfg.refresh)S.cfg.refresh=remote.cfg.refresh; if(remote.cfg.ntfy&&!S.cfg.ntfy)S.cfg.ntfy=remote.cfg.ntfy; }
       localStorage.setItem(LS_KEY,JSON.stringify(S)); render(); refreshQuotes();
       setSync('Pulled '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}));
     } else setSync('Up to date');
