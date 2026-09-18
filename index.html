@@ -166,6 +166,11 @@ tr.lotrow td{padding:4px 8px}
 .proj .band{fill:var(--accent);opacity:.12}
 .proj .median{fill:none;stroke:var(--accent);stroke-width:2}
 .proj .det{fill:none;stroke:var(--ink-2);stroke-width:1.5;stroke-dasharray:4 4}
+.crow{display:grid;grid-template-columns:1.2fr 1fr 1.2fr 1fr 1fr auto;gap:8px;align-items:end;padding:8px 0;border-bottom:1px solid var(--line)}
+.crow:last-child{border-bottom:0}
+@media (max-width:760px){.crow{grid-template-columns:1fr 1fr;} .crow .field{min-width:0}}
+.proj .line-cons{fill:none;stroke:var(--ink-3);stroke-width:1.5;stroke-dasharray:3 4}
+.proj .line-hist{fill:none;stroke:var(--warn);stroke-width:1.5;stroke-dasharray:6 4}
 .milestones{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:12px}
 .milestones>div{border:1px solid var(--line);border-radius:var(--r);padding:10px 12px}
 .milestones .y{font-size:12px;color:var(--ink-2)}
@@ -256,18 +261,36 @@ tr.lotrow td{padding:4px 8px}
 <!-- ================= PROJECTION ================= -->
 <section class="tab" id="tab-projection">
   <div class="card">
-    <h2>Where this is headed</h2>
-    <p class="note">Starts from today's account total. The dashed line is a steady return; the shaded band is the 10th–90th percentile of 600 simulated paths using the volatility you set. Contributions are added monthly.</p>
+    <div class="row spread"><h2 style="margin:0">Recurring investments</h2><button class="btn sm primary" onclick="addContrib()">Add</button></div>
+    <p class="note">The automatic buys you have set up. Each one is added to its holding on schedule in the projection below.</p>
+    <div id="contribs"></div>
+  </div>
+
+  <div class="card">
+    <h2>Return assumptions</h2>
+    <p class="note">Historical figures come from up to five years of daily prices (dividends included) and are shown for reference. The <b>base</b> return is what the projection uses; edit it per holding. Volatility and the correlation between holdings come from history.</p>
+    <div class="tbl-wrap"><table id="assumeTbl"></table></div>
+    <p class="note" id="histNote"></p>
+  </div>
+
+  <div class="card">
+    <h2>Projection</h2>
     <div class="grid g3" style="margin:12px 0">
-      <label class="field">Monthly contribution ($)<input type="number" id="pMonthly" step="50"></label>
-      <label class="field">Expected annual return (%)<input type="number" id="pRet" step="0.5"></label>
-      <label class="field">Annual volatility (%)<input type="number" id="pVol" step="1"></label>
       <label class="field">Years<input type="number" id="pYears" min="1" max="50"></label>
       <label class="field">Target amount ($, optional)<input type="number" id="pTarget" step="1000"></label>
+      <label class="field">Band scenario<select id="pScen"><option value="base">Base</option><option value="cons">Conservative</option><option value="hist">Historical</option></select></label>
     </div>
     <div class="proj" id="projChart"></div>
+    <div class="legend" id="projLegend" style="margin-top:8px"></div>
     <div class="milestones" id="milestones"></div>
     <p class="note" id="targetNote" style="margin-top:10px"></p>
+  </div>
+
+  <div class="card">
+    <h2>Composition over time</h2>
+    <p class="note">Base scenario. Shows how your allocation drifts as holdings grow at different rates.</p>
+    <div class="proj" id="compChart"></div>
+    <div class="legend" id="compLegend" style="margin-top:8px"></div>
   </div>
 </section>
 
@@ -275,7 +298,7 @@ tr.lotrow td{padding:4px 8px}
 <section class="tab" id="tab-alerts">
   <div class="card">
     <h2>Alerts</h2>
-    <p class="note">Checked on every price refresh while this page is open, and every 15 minutes by the GitHub checker when it isn't. Threshold alerts fire once and wait to be re-armed; "repeating" alerts fire each time the price moves the given amount from where it last notified you. Add your ntfy topic in Settings to get phone notifications from either path.</p>
+    <p class="note">Checked on every price refresh while this page is open, and every 5 minutes by the GitHub checker when it isn't. Threshold alerts fire once and wait to be re-armed; "repeating" alerts fire each time the price moves the given amount from where it last notified you. Add your ntfy topic in Settings to get phone notifications from either path.</p>
     <div class="grid g3" style="margin:12px 0">
       <label class="field">Symbol<select id="aSym"></select></label>
       <label class="field">Condition<select id="aType">
@@ -381,7 +404,8 @@ const SEED={
     {t:'VOO',name:'Vanguard S&P 500 ETF',lots:[{d:'2026-01-01',q:4.617,p:638.61}]}
   ],
   cash:502.60, sold:[], alerts:[], log:[],
-  cfg:{provider:'alpaca',finnhub:'',alpacaKey:'',alpacaSecret:'',gistToken:'',gistId:'',ntfy:'',refresh:30,proj:{monthly:500,ret:8,vol:16,years:20,target:0}},
+  plan:{contribs:[],assume:{}},
+  cfg:{provider:'alpaca',finnhub:'',alpacaKey:'',alpacaSecret:'',gistToken:'',gistId:'',ntfy:'',refresh:30,proj:{years:20,target:0,scen:'base'}},
   updatedAt:0
 };
 let S=load();
@@ -391,7 +415,7 @@ let timer=null, syncTimer=null, openLots={}, lastPull=0;
 let PCC={}; try{PCC=JSON.parse(sessionStorage.getItem('ledger.pcc')||'{}');}catch(e){}
 
 function load(){
-  try{const r=localStorage.getItem(LS_KEY); if(r){const s=JSON.parse(r); return Object.assign(JSON.parse(JSON.stringify(SEED)),s,{cfg:Object.assign({},SEED.cfg,s.cfg||{},{proj:Object.assign({},SEED.cfg.proj,(s.cfg||{}).proj||{})})});}}catch(e){}
+  try{const r=localStorage.getItem(LS_KEY); if(r){const s=JSON.parse(r); s.plan=Object.assign({contribs:[],assume:{}},s.plan||{}); return Object.assign(JSON.parse(JSON.stringify(SEED)),s,{cfg:Object.assign({},SEED.cfg,s.cfg||{},{proj:Object.assign({},SEED.cfg.proj,(s.cfg||{}).proj||{})})});}}catch(e){}
   return JSON.parse(JSON.stringify(SEED));
 }
 function save(sync=true){
@@ -721,7 +745,7 @@ function renderSettings(){
   if(document.activeElement&&document.activeElement.closest('#tab-settings,#tab-projection'))return;
   $('#sProv').value=S.cfg.provider||'alpaca'; $('#sKey').value=S.cfg.finnhub; $('#sAKey').value=S.cfg.alpacaKey||''; $('#sASec').value=S.cfg.alpacaSecret||''; $('#sRefresh').value=S.cfg.refresh; $('#sTok').value=S.cfg.gistToken; $('#sGist').value=S.cfg.gistId; $('#sNtfy').value=S.cfg.ntfy||'';
   $('#provAlpaca').style.display=S.cfg.provider==='finnhub'?'none':''; $('#provFinnhub').style.display=S.cfg.provider==='finnhub'?'':'none';
-  const p=S.cfg.proj; $('#pMonthly').value=p.monthly; $('#pRet').value=p.ret; $('#pVol').value=p.vol; $('#pYears').value=p.years; $('#pTarget').value=p.target||'';
+  const p=S.cfg.proj; $('#pYears').value=p.years; $('#pTarget').value=p.target||''; $('#pScen').value=p.scen||'base';
 }
 ['sProv','sKey','sAKey','sASec','sRefresh','sTok','sGist','sNtfy'].forEach(id=>$('#'+id).addEventListener('change',()=>{
   S.cfg.provider=$('#sProv').value; S.cfg.finnhub=$('#sKey').value.trim(); S.cfg.alpacaKey=$('#sAKey').value.trim(); S.cfg.alpacaSecret=$('#sASec').value.trim();
@@ -729,8 +753,8 @@ function renderSettings(){
   if(id==='sProv'){ Q={}; M={}; }
   save(false); schedule(); if(['sProv','sKey','sAKey','sASec'].includes(id)) refreshQuotes(); if(id==='sTok'||id==='sGist') syncPull();
 }));
-['pMonthly','pRet','pVol','pYears','pTarget'].forEach(id=>$('#'+id).addEventListener('input',()=>{
-  const p=S.cfg.proj; p.monthly=+$('#pMonthly').value||0; p.ret=+$('#pRet').value||0; p.vol=+$('#pVol').value||0; p.years=Math.min(50,Math.max(1,+$('#pYears').value||1)); p.target=+$('#pTarget').value||0;
+['pYears','pTarget','pScen'].forEach(id=>$('#'+id).addEventListener('input',()=>{
+  const p=S.cfg.proj; p.years=Math.min(50,Math.max(1,+$('#pYears').value||1)); p.target=+$('#pTarget').value||0; p.scen=$('#pScen').value;
   localStorage.setItem(LS_KEY,JSON.stringify(S)); renderProj(); queueSync();
 }));
 
@@ -923,46 +947,168 @@ function renderHist(){
 }
 
 /* ===================================================================
-   PROJECTION
+   PROJECTION — contribution schedule, historical stats, correlated Monte Carlo
 =================================================================== */
+let H={}; try{H=JSON.parse(localStorage.getItem('ledger.hist')||'{}');}catch(e){}   // per-symbol {cagr,vol,years,at}, plus _corr
+const FREQ={weekly:{l:'Weekly',pm:52/12},biweekly:{l:'Every 2 weeks',pm:26/12},semimonthly:{l:'Twice a month',pm:2},monthly:{l:'Monthly',pm:1},quarterly:{l:'Quarterly',pm:1/3},annual:{l:'Yearly',pm:1/12}};
+const DEFAULT_RET=7, DEFAULT_VOL=18, CASH_RET=4, HIST_CAP=25;
+const moneyK=n=>Math.abs(n)>=1e6?'$'+(n/1e6).toFixed(n>=1e7?0:1)+'M':Math.abs(n)>=1e3?'$'+Math.round(n/1e3)+'k':'$'+Math.round(n);
 function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
-function renderProj(){
-  const p=S.cfg.proj, T=totals(), start=T.total;
-  const N=p.years*12, mu=p.ret/100, sig=p.vol/100, c=p.monthly;
-  // deterministic
-  const det=[start]; for(let m=1;m<=N;m++) det.push(det[m-1]*Math.pow(1+mu,1/12)+c);
-  // monte carlo (log-normal monthly steps)
-  const PATHS=600, rnd=mulberry(42), dt=1/12, drift=(mu-sig*sig/2)*dt, sd=sig*Math.sqrt(dt);
-  const ends=Array.from({length:N+1},()=>[]);
-  for(let k=0;k<PATHS;k++){
-    let v=start; ends[0].push(v);
-    for(let m=1;m<=N;m++){ const u1=rnd()||1e-9,u2=rnd(); const z=Math.sqrt(-2*Math.log(u1))*Math.cos(2*Math.PI*u2); v=v*Math.exp(drift+sd*z)+c; ends[m].push(v); }
+
+/* ---- recurring investments ---- */
+function addContrib(){ S.plan.contribs.push({id:Date.now(),t:S.holdings[0]?S.holdings[0].t:'CASH',amt:100,freq:'biweekly',start:today(),end:''}); save(false); }
+function delContrib(id){ S.plan.contribs=S.plan.contribs.filter(c=>c.id!==id); save(false); }
+function updContrib(id,k,v){ const c=S.plan.contribs.find(c=>c.id===id); if(!c)return; c[k]=k==='amt'?(+v||0):v; localStorage.setItem(LS_KEY,JSON.stringify(S)); queueSync(); renderProj(); }
+function renderContribs(){
+  const el=$('#contribs'); const opts=[...S.holdings.map(h=>h.t),'CASH'];
+  if(!S.plan.contribs.length){el.innerHTML='<p class="muted" style="margin:6px 0 0">No recurring investments yet. Add one to model your automatic buys.</p>';return;}
+  const monthly=S.plan.contribs.reduce((a,c)=>a+c.amt*FREQ[c.freq].pm,0);
+  el.innerHTML=S.plan.contribs.map(c=>`<div class="crow">
+    <label class="field">Into<select onchange="updContrib(${c.id},'t',this.value)">${opts.map(o=>`<option ${o===c.t?'selected':''}>${esc(o)}</option>`).join('')}</select></label>
+    <label class="field">Amount ($)<input type="number" step="1" value="${c.amt}" onchange="updContrib(${c.id},'amt',this.value)"></label>
+    <label class="field">Frequency<select onchange="updContrib(${c.id},'freq',this.value)">${Object.keys(FREQ).map(f=>`<option value="${f}" ${f===c.freq?'selected':''}>${FREQ[f].l}</option>`).join('')}</select></label>
+    <label class="field">Starts<input type="date" value="${c.start||''}" onchange="updContrib(${c.id},'start',this.value)"></label>
+    <label class="field">Ends (optional)<input type="date" value="${c.end||''}" onchange="updContrib(${c.id},'end',this.value)"></label>
+    <button class="btn sm danger" onclick="delContrib(${c.id})" style="margin-bottom:1px">Remove</button>
+  </div>`).join('')+`<p class="note" style="margin-top:10px">About <b class="num">${money(monthly,0)}</b> per month in total, <b class="num">${money(monthly*12,0)}</b> per year.</p>`;
+}
+
+/* ---- historical stats from Alpaca daily bars (dividend-adjusted) ---- */
+async function fetchHistory(force){
+  if(S.cfg.provider!=='alpaca'||!hasKey()||!S.holdings.length)return;
+  const syms=S.holdings.map(h=>h.t).filter(x=>force||!H[x]||Date.now()-H[x].at>24*3600e3);
+  if(!syms.length)return;
+  $('#histNote').textContent='Loading price history…';
+  try{
+    const start=new Date(Date.now()-5*365.25*864e5).toISOString().slice(0,10);
+    let page=null, bars={};
+    do{
+      const j=await fa('https://data.alpaca.markets/v2/stocks/bars?symbols='+encodeURIComponent(syms.join(','))+'&timeframe=1Day&start='+start+'&limit=10000&feed=iex&adjustment=all'+(page?'&page_token='+encodeURIComponent(page):''));
+      for(const x in (j.bars||{})) bars[x]=(bars[x]||[]).concat(j.bars[x]);
+      page=j.next_page_token;
+    }while(page);
+    const series={};
+    for(const x of syms){
+      const b=(bars[x]||[]).filter(k=>k.c>0); if(b.length<60){H[x]={cagr:null,vol:null,years:0,at:Date.now()};continue;}
+      const rets=[]; for(let i=1;i<b.length;i++) rets.push(Math.log(b[i].c/b[i-1].c));
+      const mean=rets.reduce((p,q)=>p+q,0)/rets.length, sd=Math.sqrt(rets.reduce((p,q)=>p+(q-mean)**2,0)/(rets.length-1));
+      const years=(Date.parse(b[b.length-1].t)-Date.parse(b[0].t))/(365.25*864e5);
+      H[x]={cagr:(Math.pow(b[b.length-1].c/b[0].c,1/years)-1)*100,vol:sd*Math.sqrt(252)*100,years,at:Date.now()};
+      series[x]=Object.fromEntries(b.slice(1).map((k,i)=>[k.t.slice(0,10),rets[i]]));
+    }
+    // pairwise correlations on overlapping days
+    const corr=H._corr||{};
+    const keys=Object.keys(series);
+    for(let i=0;i<keys.length;i++)for(let j=i+1;j<keys.length;j++){
+      const A=series[keys[i]],B=series[keys[j]]; const days=Object.keys(A).filter(dd=>dd in B); if(days.length<60)continue;
+      const xa=days.map(dd=>A[dd]),xb=days.map(dd=>B[dd]); const ma=xa.reduce((p,q)=>p+q,0)/xa.length, mb=xb.reduce((p,q)=>p+q,0)/xb.length;
+      let num=0,da=0,db=0; for(let k=0;k<days.length;k++){num+=(xa[k]-ma)*(xb[k]-mb);da+=(xa[k]-ma)**2;db+=(xb[k]-mb)**2;}
+      corr[keys[i]+'|'+keys[j]]=corr[keys[j]+'|'+keys[i]]=num/Math.sqrt(da*db);
+    }
+    H._corr=corr;
+    localStorage.setItem('ledger.hist',JSON.stringify(H));
+  }catch(e){ $('#histNote').textContent='Could not load history: '+e.message; }
+  renderProj();
+}
+function assumeFor(t){
+  const a=S.plan.assume[t]||{}; const h=H[t]||{};
+  if(t==='CASH') return {ret:a.ret??CASH_RET,vol:0,hist:CASH_RET,hvol:0};
+  return {ret:a.ret??(h.cagr!=null?Math.min(h.cagr,12):DEFAULT_RET), vol:a.vol??(h.vol!=null?h.vol:DEFAULT_VOL), hist:h.cagr, hvol:h.vol};
+}
+function setAssume(t,k,v){ S.plan.assume[t]=S.plan.assume[t]||{}; if(v==='')delete S.plan.assume[t][k]; else S.plan.assume[t][k]=+v; localStorage.setItem(LS_KEY,JSON.stringify(S)); queueSync(); renderProj(); }
+function renderAssume(){
+  const rows=[...S.holdings.map(h=>h.t),'CASH'];
+  $('#assumeTbl').innerHTML=`<thead><tr><th>Holding</th><th>Historical return</th><th>Historical volatility</th><th>Base return (%)</th><th>Volatility (%)</th></tr></thead><tbody>`+
+    rows.map(t=>{const a=assumeFor(t), h=H[t]||{};
+      return `<tr><td><b>${esc(t)}</b>${t!=='CASH'&&h.years?`<div class="nm">${h.years.toFixed(1)} yrs of data</div>`:''}</td>
+        <td class="num">${t==='CASH'?'—':h.cagr!=null?pct(h.cagr,1)+'/yr':'<span class="muted">—</span>'}</td>
+        <td class="num">${t==='CASH'?'—':h.vol!=null?fmt(h.vol,1)+'%':'<span class="muted">—</span>'}</td>
+        <td><input type="number" step="0.5" value="${fmt(a.ret,1).replace(',','')}" style="width:90px;text-align:right" onchange="setAssume('${t}','ret',this.value)"></td>
+        <td>${t==='CASH'?'—':`<input type="number" step="1" value="${fmt(a.vol,0)}" style="width:90px;text-align:right" onchange="setAssume('${t}','vol',this.value)">`}</td></tr>`;}).join('')+'</tbody>';
+  const any=S.holdings.some(h=>H[h.t]&&H[h.t].cagr!=null);
+  $('#histNote').innerHTML=any?'Base return defaults to the historical figure capped at 12%/yr; conservative is 3 points below base; the historical scenario uses the past return capped at '+HIST_CAP+'%/yr, because nothing compounds above that for decades. Past returns are a weak guide to future ones, especially for single stocks.':(hasKey()?'History loads on the first visit each day.':'Add Alpaca keys in Settings to load price history.');
+}
+
+/* ---- engine ---- */
+function monthlyContribs(){ // per symbol, per month index → dollars
+  const N=S.cfg.proj.years*12, out={}; const t0=new Date(); t0.setDate(1);
+  for(const c of S.plan.contribs){
+    const pm=c.amt*FREQ[c.freq].pm; if(!(pm>0))continue;
+    const sM=c.start?Math.max(0,Math.round((Date.parse(c.start)-t0)/(30.44*864e5))):0;
+    const eM=c.end?Math.round((Date.parse(c.end)-t0)/(30.44*864e5)):N;
+    out[c.t]=out[c.t]||new Float64Array(N+1);
+    for(let m=Math.max(1,sM);m<=Math.min(N,eM);m++) out[c.t][m]+=pm;
+  }
+  return out;
+}
+function project(scen){
+  const N=S.cfg.proj.years*12, syms=[...S.holdings.map(h=>h.t),'CASH'], C=monthlyContribs();
+  const start=Object.fromEntries(S.holdings.map(h=>[h.t,value(h)])); start.CASH=S.cash;
+  const mu=Object.fromEntries(syms.map(t=>{const a=assumeFor(t); let r=a.ret; if(scen==='cons')r=t==='CASH'?a.ret:a.ret-3; if(scen==='hist')r=t==='CASH'?a.ret:(a.hist!=null?Math.min(a.hist,HIST_CAP):a.ret); return [t,r/100];}));
+  const sig=Object.fromEntries(syms.map(t=>[t,assumeFor(t).vol/100]));
+  // deterministic per holding
+  const det=Object.fromEntries(syms.map(t=>{const v=[start[t]];for(let m=1;m<=N;m++)v.push(v[m-1]*Math.pow(1+mu[t],1/12)+((C[t]&&C[t][m])||0));return [t,v];}));
+  const detTot=Array.from({length:N+1},(_,m)=>syms.reduce((a,t)=>a+det[t][m],0));
+  const contributed=Array.from({length:N+1},(_,m)=>{let c=0;for(const t of syms)for(let k=1;k<=m;k++)c+=(C[t]&&C[t][k])||0;return detTot[0]+c;});
+  return {det,detTot,contributed,mu,sig,syms,start,C,N};
+}
+function cholesky(A){ const n=A.length,L=A.map(r=>r.map(()=>0)); for(let i=0;i<n;i++)for(let j=0;j<=i;j++){let s=A[i][j];for(let k=0;k<j;k++)s-=L[i][k]*L[j][k]; if(i===j){L[i][j]=Math.sqrt(Math.max(s,1e-9));}else L[i][j]=s/L[j][j];} return L; }
+function monteCarlo(P,paths){
+  const {mu,sig,syms,start,C,N}=P, risky=syms.filter(t=>t!=='CASH'), n=risky.length;
+  const corr=(H._corr)||{}; const A=risky.map((a,i)=>risky.map((b,j)=>i===j?1:(corr[a+'|'+b]??0.5)));
+  const L=n?cholesky(A):[]; const rnd=mulberry(7), dt=1/12;
+  const pct=Array.from({length:N+1},()=>[]);
+  for(let k=0;k<paths;k++){
+    const v=Object.assign({},start); pct[0].push(syms.reduce((a,t)=>a+v[t],0));
+    for(let m=1;m<=N;m++){
+      const z=[]; for(let i=0;i<n;i++){const u1=rnd()||1e-9,u2=rnd();z.push(Math.sqrt(-2*Math.log(u1))*Math.cos(2*Math.PI*u2));}
+      risky.forEach((t,i)=>{ let e=0; for(let j=0;j<=i;j++)e+=L[i][j]*z[j]; const s=sig[t]; v[t]=v[t]*Math.exp((mu[t]-s*s/2)*dt+s*Math.sqrt(dt)*e)+((C[t]&&C[t][m])||0); });
+      v.CASH=v.CASH*Math.pow(1+mu.CASH,1/12)+((C.CASH&&C.CASH[m])||0);
+      pct[m].push(syms.reduce((a,t)=>a+v[t],0));
+    }
   }
   const q=(arr,f)=>{const s=arr.slice().sort((a,b)=>a-b);return s[Math.floor(f*(s.length-1))]};
-  const p10=ends.map(a=>q(a,.10)), p50=ends.map(a=>q(a,.5)), p90=ends.map(a=>q(a,.9));
-  // chart
-  const W=800,H=300,pl=64,pr=12,pt=14,pb=30;
-  const hi=Math.max(p90[N],det[N])*1.05, lo=0;
-  const X=m=>pl+(W-pl-pr)*m/N, Y=v=>pt+(H-pt-pb)*(1-(v-lo)/(hi-lo));
+  return {p10:pct.map(a=>q(a,.1)),p50:pct.map(a=>q(a,.5)),p90:pct.map(a=>q(a,.9))};
+}
+
+/* ---- render ---- */
+function renderProj(){
+  if(!$('#tab-projection').classList.contains('on'))return;
+  renderContribs(); renderAssume();
+  const p=S.cfg.proj, scen=p.scen||'base', N=p.years*12;
+  const B=project('base'), Cn=project('cons'), Hs=project('hist'), P={base:B,cons:Cn,hist:Hs}[scen];
+  const mc=monteCarlo(P,500);
+  const W=800,Hh=320,pl=70,pr=12,pt=14,pb=30;
+  const hi=Math.max(mc.p90[N],B.detTot[N],Cn.detTot[N])*1.08, lo=0, histOff=Hs.detTot[N]>hi;
+  const X=m=>pl+(W-pl-pr)*m/N, Y=v=>pt+(Hh-pt-pb)*(1-(v-lo)/(hi-lo));
   const line=arr=>arr.map((v,i)=>(i?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' ');
-  const band='M'+p90.map((v,i)=>X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' L')+' L'+p10.slice().reverse().map((v,i)=>X(N-i).toFixed(1)+' '+Y(v).toFixed(1)).join(' L')+' Z';
-  const yt=5, ticks=Array.from({length:yt+1},(_,i)=>lo+(hi-lo)*i/yt);
-  const xt=Math.min(p.years,10), xticks=Array.from({length:xt+1},(_,i)=>Math.round(p.years*i/xt));
+  const band='M'+mc.p90.map((v,i)=>X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' L')+' L'+mc.p10.slice().reverse().map((v,i)=>X(N-i).toFixed(1)+' '+Y(v).toFixed(1)).join(' L')+' Z';
+  const ticks=Array.from({length:6},(_,i)=>lo+(hi-lo)*i/5), xt=Math.min(p.years,10), xticks=Array.from({length:xt+1},(_,i)=>Math.round(p.years*i/xt));
   let tgt=''; if(p.target>0&&p.target<hi) tgt=`<line x1="${pl}" x2="${W-pr}" y1="${Y(p.target)}" y2="${Y(p.target)}" stroke="var(--warn)" stroke-dasharray="2 4"/><text class="axis" x="${W-pr}" y="${Y(p.target)-4}" text-anchor="end" fill="var(--warn)">target ${money(p.target,0)}</text>`;
-  $('#projChart').innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Projected account value">
+  $('#projChart').innerHTML=`<svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Projected account value"><defs><clipPath id="plotclip"><rect x="${pl}" y="${pt}" width="${W-pl-pr}" height="${Hh-pt-pb}"/></clipPath></defs>
     <g class="grid">${ticks.map(t=>`<line x1="${pl}" x2="${W-pr}" y1="${Y(t)}" y2="${Y(t)}"/>`).join('')}</g>
-    ${ticks.map(t=>`<text class="axis" x="${pl-6}" y="${Y(t)+4}" text-anchor="end">${money(t,0)}</text>`).join('')}
-    ${xticks.map(y=>`<text class="axis" x="${X(y*12)}" y="${H-8}" text-anchor="middle">${y}y</text>`).join('')}
-    <path class="band" d="${band}"/><path class="median" d="${line(p50)}"/><path class="det" d="${line(det)}"/>${tgt}
-    <text class="axis" x="${pl+6}" y="${pt+12}">solid: median simulated · dashed: steady ${p.ret}% · band: 10th–90th pct</text>
-  </svg>`;
+    ${ticks.map(t=>`<text class="axis" x="${pl-6}" y="${Y(t)+4}" text-anchor="end">${moneyK(t)}</text>`).join('')}
+    ${xticks.map(y=>`<text class="axis" x="${X(y*12)}" y="${Hh-8}" text-anchor="middle">${y}y</text>`).join('')}
+    <g clip-path="url(#plotclip)"><path class="band" d="${band}"/>
+    <path class="det" d="${line(B.contributed)}"/>
+    <path class="line-cons" d="${line(Cn.detTot)}"/>
+    <path class="line-hist" d="${line(Hs.detTot)}"/>
+    <path class="median" d="${line(B.detTot)}"/></g>${tgt}
+    ${histOff?`<text class="axis" x="${W-pr}" y="${pt+12}" text-anchor="end" fill="var(--warn)">historical line exceeds chart (${moneyK(Hs.detTot[N])} at ${p.years}y)</text>`:''}</svg>`;
+  $('#projLegend').innerHTML=`<span><i style="background:var(--accent)"></i>Base</span><span><i style="background:var(--ink-3)"></i>Conservative</span><span><i style="background:var(--warn)"></i>Historical (capped at ${HIST_CAP}%/yr)</span><span><i style="background:var(--ink-2);opacity:.5"></i>Money contributed</span><span><i style="background:var(--accent);opacity:.2"></i>10–90% band (${{base:'base',cons:'conservative',hist:'historical'}[scen]})</span>`;
   const ms=[1,5,10,20,30].filter(y=>y<=p.years); if(!ms.includes(p.years)) ms.push(p.years);
-  $('#milestones').innerHTML=ms.map(y=>`<div><div class="y">In ${y} year${y>1?'s':''}</div><div class="v num">${money(p50[y*12],0)}</div><div class="r num">${money(p10[y*12],0)} – ${money(p90[y*12],0)}</div><div class="r num">contributed ${money(start+c*y*12,0)}</div></div>`).join('');
+  $('#milestones').innerHTML=ms.map(y=>{const m=y*12, v=B.detTot[m], c=B.contributed[m];
+    return `<div><div class="y">In ${y} year${y>1?'s':''}</div><div class="v num">${money(v,0)}</div><div class="r num">${money(Cn.detTot[m],0)} cons · ${money(Hs.detTot[m],0)} hist</div><div class="r num">${money(c,0)} in · ${money(v-c,0)} growth</div></div>`;}).join('');
   let tn='';
-  if(p.target>0){ const mDet=det.findIndex(v=>v>=p.target), m50=p50.findIndex(v=>v>=p.target), m10=p10.findIndex(v=>v>=p.target);
-    const yr=m=>m<0?`not within ${p.years} years`:(m/12).toFixed(1)+' years';
-    tn=`Reaching ${money(p.target,0)}: steady return ${yr(mDet)} · median path ${yr(m50)} · 90% of paths by ${yr(m10)}.`; }
+  if(p.target>0){ const yr=arr=>{const m=arr.findIndex(v=>v>=p.target);return m<0?`not within ${p.years} years`:(m/12).toFixed(1)+' years';};
+    tn=`Reaching ${money(p.target,0)}: base ${yr(B.detTot)} · conservative ${yr(Cn.detTot)} · historical ${yr(Hs.detTot)} · 9 in 10 simulated ${scen} paths: ${yr(mc.p10)}.`; }
   $('#targetNote').textContent=tn;
+  // composition (stacked, base)
+  const syms=B.syms, tot=B.detTot, W2=800,H2=200;
+  const Y2=f=>pt+(H2-pt-pb)*(1-f); let acc=new Array(N+1).fill(0), paths='';
+  syms.forEach((t,i)=>{ const top=acc.map((a,m)=>a+B.det[t][m]/tot[m]); const d='M'+top.map((f,m)=>X(m).toFixed(1)+' '+Y2(f).toFixed(1)).join(' L')+' L'+acc.slice().reverse().map((f,m)=>X(N-m).toFixed(1)+' '+Y2(f).toFixed(1)).join(' L')+' Z'; paths+=`<path d="${d}" fill="${COLORS[(i+1)%COLORS.length]}" opacity=".85"/>`; acc=top; });
+  $('#compChart').innerHTML=`<svg viewBox="0 0 ${W2} ${H2}">${[0,.25,.5,.75,1].map(f=>`<text class="axis" x="${pl-6}" y="${Y2(f)+4}" text-anchor="end">${Math.round(f*100)}%</text>`).join('')}${xticks.map(y=>`<text class="axis" x="${X(y*12)}" y="${H2-8}" text-anchor="middle">${y}y</text>`).join('')}${paths}</svg>`;
+  $('#compLegend').innerHTML=syms.map((t,i)=>`<span><i style="background:${COLORS[(i+1)%COLORS.length]}"></i>${esc(t)} <span class="num muted">${fmt(B.det[t][0]/tot[0]*100,0)}% → ${fmt(B.det[t][N]/tot[N]*100,0)}%</span></span>`).join('');
 }
 
 /* ===================================================================
@@ -972,7 +1118,7 @@ const GH='https://api.github.com';
 function ghHeaders(){return {'Authorization':'Bearer '+S.cfg.gistToken,'Accept':'application/vnd.github+json','Content-Type':'application/json'};}
 function setSync(t,err){ $('#syncTxt').textContent=t; $('#syncTxt').className='sync'+(err?' err':''); $('#syncStatus').textContent=t; }
 function queueSync(){ if(!S.cfg.gistToken)return; clearTimeout(syncTimer); syncTimer=setTimeout(()=>syncPush(false),2500); }
-function payload(){ const {holdings,cash,sold,alerts,log,updatedAt}=S; const cfg={proj:S.cfg.proj,refresh:S.cfg.refresh,ntfy:S.cfg.ntfy||''}; return JSON.stringify({holdings,cash,sold,alerts,log,updatedAt,cfg},null,1); }
+function payload(){ const {holdings,cash,sold,alerts,log,plan,updatedAt}=S; const cfg={proj:S.cfg.proj,refresh:S.cfg.refresh,ntfy:S.cfg.ntfy||''}; return JSON.stringify({holdings,cash,sold,alerts,log,plan,updatedAt,cfg},null,1); }
 async function syncPush(manual){
   if(!S.cfg.gistToken){ if(manual)setSync('Add a GitHub token first',true); return; }
   try{
@@ -997,7 +1143,7 @@ async function syncPull(manual){
     let txt=f.content; if(f.truncated){ txt=await (await fetch(f.raw_url)).text(); }
     const remote=JSON.parse(txt);
     if(manual||(remote.updatedAt||0)>(S.updatedAt||0)){
-      Object.assign(S,{holdings:remote.holdings||[],cash:remote.cash||0,sold:remote.sold||[],alerts:remote.alerts||[],log:remote.log||[],updatedAt:remote.updatedAt||0});
+      Object.assign(S,{holdings:remote.holdings||[],cash:remote.cash||0,sold:remote.sold||[],alerts:remote.alerts||[],log:remote.log||[],plan:Object.assign({contribs:[],assume:{}},remote.plan||{}),updatedAt:remote.updatedAt||0});
       if(remote.cfg){ if(remote.cfg.proj)S.cfg.proj=Object.assign({},S.cfg.proj,remote.cfg.proj); if(remote.cfg.refresh)S.cfg.refresh=remote.cfg.refresh; if(remote.cfg.ntfy&&!S.cfg.ntfy)S.cfg.ntfy=remote.cfg.ntfy; }
       localStorage.setItem(LS_KEY,JSON.stringify(S)); render(); refreshQuotes();
       setSync('Pulled '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}));
@@ -1015,7 +1161,7 @@ function resetAll(){ if(confirm('Erase all holdings, alerts, history and setting
 /* ===================================================================
    NAV + BOOT
 =================================================================== */
-function showTab(id){ document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===id)); document.querySelectorAll('section.tab').forEach(s=>s.classList.toggle('on',s.id==='tab-'+id)); if(id==='projection')renderProj(); }
+function showTab(id){ document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===id)); document.querySelectorAll('section.tab').forEach(s=>s.classList.toggle('on',s.id==='tab-'+id)); if(id==='projection'){renderProj();fetchHistory(false);} }
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
 try{M=JSON.parse(sessionStorage.getItem('ledger.metrics')||'{}');}catch(e){}
 render(); schedule(); refreshQuotes(); syncPull(false);
