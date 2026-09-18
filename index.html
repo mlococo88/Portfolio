@@ -302,7 +302,7 @@ tr.lotrow td{padding:4px 8px}
       <label class="field">Refresh every (seconds)<input id="sRefresh" type="number" min="5" step="5"></label>
     </div>
     <div id="provAlpaca" style="margin-top:12px">
-      <p class="note">Sign up at <a href="https://alpaca.markets" target="_blank" rel="noopener">alpaca.markets</a> (a free paper-trading account is enough), then in the dashboard generate an API key. You get a Key ID and a Secret — paste both. Quotes use Alpaca's free IEX feed, which reports extended-hours trades.</p>
+      <p class="note">Sign up at <a href="https://alpaca.markets" target="_blank" rel="noopener">alpaca.markets</a> (a free paper-trading account is enough), then in the dashboard generate an API key. You get a Key ID and a Secret — paste both. Regular-session quotes are real-time from IEX; outside the session the app also pulls Alpaca's free 15-minute-delayed consolidated feed for better pre-market and after-hours coverage.</p>
       <div class="grid g2">
         <label class="field">Alpaca key ID<input id="sAKey" autocomplete="off" placeholder="PK…"></label>
         <label class="field">Alpaca secret key<input id="sASec" autocomplete="off" type="password" placeholder="secret"></label>
@@ -442,22 +442,30 @@ async function fetchQuotesFinnhub(syms){
   const res=await Promise.all(syms.map(s=>fq('quote?symbol='+encodeURIComponent(s))));
   res.forEach((q,i)=>{ if(q&&q.c) Q[syms[i]]={c:q.c,pc:q.pc,d:q.d??(q.c-q.pc),dp:q.dp??((q.c-q.pc)/q.pc*100),t:q.t,rc:null}; });
 }
+function parseSnap(x,d){
+  if(!x||!x.latestTrade) return null;
+  let c=x.latestTrade.p, t=Math.floor(Date.parse(x.latestTrade.t)/1000), src='trade';
+  const lq=x.latestQuote;
+  if(lq&&lq.bp>0&&lq.ap>0){ const qt=Math.floor(Date.parse(lq.t)/1000); if(qt>t+60&&(lq.ap-lq.bp)/lq.ap<0.01){ c=Math.round((lq.bp+lq.ap)*50)/100; t=qt; src='quote'; } }
+  const db=x.dailyBar, pdb=x.prevDailyBar;
+  let pc=null, rc=null;
+  if(db&&etParts(new Date(db.t)).d===d){ pc=pdb?pdb.c:null; rc=db.c; }
+  else if(db){ pc=db.c; }
+  else if(pdb){ pc=pdb.c; }
+  if(pc==null) pc=c;
+  return {c,pc,d:c-pc,dp:pc?(c-pc)/pc*100:0,t,rc,src};
+}
 async function fetchQuotesAlpaca(syms){
-  const j=await fa('https://data.alpaca.markets/v2/stocks/snapshots?symbols='+encodeURIComponent(syms.join(','))+'&feed=iex');
-  const d=today();
+  const d=today(), st=marketStatus();
+  const url=feed=>'https://data.alpaca.markets/v2/stocks/snapshots?symbols='+encodeURIComponent(syms.join(','))+'&feed='+feed;
+  // Outside the regular session, the 15-minute-delayed consolidated feed usually beats IEX's stale last trade.
+  const [iex,sip]=await Promise.all([fa(url('iex')), st.k==='open'?null:fa(url('delayed_sip')).catch(()=>null)]);
   for(const s of syms){
-    const x=j[s]; if(!x||!x.latestTrade) continue;
-    let c=x.latestTrade.p, t=Math.floor(Date.parse(x.latestTrade.t)/1000), src='trade';
-    // In thin extended sessions the bid/ask midpoint is often fresher than the last trade
-    const lq=x.latestQuote;
-    if(lq&&lq.bp>0&&lq.ap>0){ const qt=Math.floor(Date.parse(lq.t)/1000); if(qt>t+60&&(lq.ap-lq.bp)/lq.ap<0.01){ c=Math.round((lq.bp+lq.ap)*50)/100; t=qt; src='quote'; } }
-    const db=x.dailyBar, pdb=x.prevDailyBar;
-    let pc=null, rc=null;
-    if(db&&etParts(new Date(db.t)).d===d){ pc=pdb?pdb.c:null; rc=db.c; }   // today's bar exists
-    else if(db){ pc=db.c; }                                                  // session hasn't rolled: daily bar is yesterday
-    else if(pdb){ pc=pdb.c; }
-    if(pc==null) pc=c;
-    Q[s]={c,pc,d:c-pc,dp:pc?(c-pc)/pc*100:0,t,rc,src};
+    const a=parseSnap(iex[s],d), b=sip?parseSnap(sip[s],d):null;
+    let q=a;
+    if(b&&(!a||b.t>a.t)){ q=b; q.src='delayed'; }
+    else if(a&&b){ if(b.rc!=null) a.rc=b.rc; if(b.pc!=null) a.pc=b.pc; a.d=a.c-a.pc; a.dp=a.pc?a.d/a.pc*100:0; } // consolidated closes are more accurate
+    if(q) Q[s]=q;
   }
 }
 async function refreshQuotes(manual){
@@ -562,8 +570,8 @@ function renderExt(){
       <span>${lbl} move <b class="num ${cls(x.extChg)}">${signed(x.extChg)} (${pct(x.extPct)})</b></span>
       <span>${x.pre?'Yesterday\'s close':'Regular-session close'} <b class="num">${money(x.regClose)}</b></span>
     </div>
-    <div class="syms">${x.rows.map(r=>`<span title="${r.src==='quote'?'bid/ask midpoint':'last trade'} at ${esc(r.when)}"><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span> <span class="muted">${esc(r.when)}${r.src==='quote'?' mid':''}</span></span>`).join('')}</div>
-    ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported yet — prices shown are the last regular-session close.</p>'}
+    <div class="syms">${x.rows.map(r=>`<span title="${r.src==='quote'?'IEX bid/ask midpoint':r.src==='delayed'?'consolidated price, 15-minute delayed':'IEX last trade'} at ${esc(r.when)}"><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span> <span class="muted">${esc(r.when)}${r.src==='quote'?' mid':r.src==='delayed'?' ·15m':''}</span></span>`).join('')}</div>
+    ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported yet — prices shown are the last regular-session close. Extended-hours prices are consolidated data on a 15-minute delay (marked ·15m) or real-time IEX trades, whichever is fresher.</p>'}
     ${x.haveAll?'':'<p class="note">Today\'s 4 pm close isn\'t available, so the after-hours move is measured from yesterday\'s close.</p>'}`;
 }
 
