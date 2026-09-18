@@ -80,7 +80,7 @@ S = json.loads(content)
 holdings = S.get("holdings", [])
 alerts = S.get("alerts", [])
 cash = float(S.get("cash", 0))
-pending = [a for a in alerts if not a.get("fired")]
+pending = [a for a in alerts if a.get("t", "").startswith("step") or not a.get("fired")]
 want_summary = os.environ.get("CLOSE_SUMMARY") == "1" and 960 <= minutes < 1020 and S.get("lastSummary") != now.strftime("%Y-%m-%d")
 if not pending and not want_summary:
     print("no pending alerts; nothing to check")
@@ -145,10 +145,25 @@ print(f"{now:%a %H:%M} ET — account {money(total)}, day {signed(day)}")
 
 # ---------------------------------------------------------------- evaluate
 messages = []
+anchored = False
+stamp = now.strftime("%b %-d, %-I:%M %p")
 for a in pending:
     t = a.get("t"); v = float(a.get("v", 0)); s = a.get("s")
     hit = None
-    if t == "total_above" and total > v:
+    if t in ("step_usd", "step_pct"):
+        q = Q.get(s)
+        if not q:
+            continue
+        if a.get("anchor") is None:
+            a["anchor"] = q["c"]; anchored = True
+            continue
+        mv = q["c"] - a["anchor"]
+        ok = abs(mv) >= v if t == "step_usd" else abs(mv) / a["anchor"] * 100 >= v
+        if ok:
+            amt = money(abs(mv)) if t == "step_usd" else f"{abs(mv) / a['anchor'] * 100:.2f}%"
+            hit = f"{s} {'up' if mv > 0 else 'down'} {amt} to {money(q['c'])} (from {money(a['anchor'])})"
+            a["anchor"] = q["c"]; a["last"] = stamp; a["count"] = a.get("count", 0) + 1
+    elif t == "total_above" and total > v:
         hit = f"Account total is {money(total)}, above {money(v)}"
     elif t == "total_below" and total < v:
         hit = f"Account total is {money(total)}, below {money(v)}"
@@ -163,7 +178,8 @@ for a in pending:
         elif t == "daypct_dn" and q["dp"] < -v:
             hit = f"{s} is down {-q['dp']:.2f}% today at {money(q['c'])}"
     if hit:
-        a["fired"] = now.strftime("%b %-d, %-I:%M %p")
+        if not t.startswith("step"):
+            a["fired"] = stamp
         messages.append(hit)
 
 if want_summary:
@@ -171,12 +187,14 @@ if want_summary:
     messages.append(f"Close: {money(total)} · today {signed(day)} ({pct(day / base * 100 if base else 0)}) · total gain {signed(inv - cost)}")
     S["lastSummary"] = today
 
-if not messages:
+if not messages and not anchored:
     print("no alerts tripped")
     sys.exit(0)
 
 # ---------------------------------------------------------------- notify
 topic = env("NTFY_TOPIC"); server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+if not messages:
+    print("anchored new repeating alert(s)")
 for m in messages:
     http(f"{server}/{topic}", {"Title": "Ledger", "Priority": "high", "Tags": "chart_with_upwards_trend"}, m.encode(), "POST")
     print("sent:", m)
