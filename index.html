@@ -297,10 +297,20 @@ tr.lotrow td{padding:4px 8px}
 <section class="tab" id="tab-settings">
   <div class="card">
     <h2>Prices</h2>
-    <p class="note">Quotes come from Finnhub. A free key gives real-time US prices, including pre- and post-market trades. Get one at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io</a>.</p>
     <div class="grid g2">
-      <label class="field">Finnhub API key<input id="sKey" autocomplete="off" placeholder="paste key"></label>
+      <label class="field">Data source<select id="sProv"><option value="alpaca">Alpaca (free, includes pre/after-hours)</option><option value="finnhub">Finnhub</option></select></label>
       <label class="field">Refresh every (seconds)<input id="sRefresh" type="number" min="5" step="5"></label>
+    </div>
+    <div id="provAlpaca" style="margin-top:12px">
+      <p class="note">Sign up at <a href="https://alpaca.markets" target="_blank" rel="noopener">alpaca.markets</a> (a free paper-trading account is enough), then in the dashboard generate an API key. You get a Key ID and a Secret — paste both. Quotes use Alpaca's free IEX feed, which reports extended-hours trades.</p>
+      <div class="grid g2">
+        <label class="field">Alpaca key ID<input id="sAKey" autocomplete="off" placeholder="PK…"></label>
+        <label class="field">Alpaca secret key<input id="sASec" autocomplete="off" type="password" placeholder="secret"></label>
+      </div>
+    </div>
+    <div id="provFinnhub" style="margin-top:12px">
+      <p class="note">Get a free key at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io</a>. Note: the free tier's quote may lag or omit extended-hours trades.</p>
+      <div class="grid g2"><label class="field">Finnhub API key<input id="sKey" autocomplete="off" placeholder="paste key"></label></div>
     </div>
   </div>
   <div class="card">
@@ -346,7 +356,7 @@ const SEED={
     {t:'VOO',name:'Vanguard S&P 500 ETF',lots:[{d:'2026-01-01',q:4.617,p:638.61}]}
   ],
   cash:502.60, sold:[], alerts:[], log:[],
-  cfg:{finnhub:'',gistToken:'',gistId:'',refresh:30,proj:{monthly:500,ret:8,vol:16,years:20,target:0}},
+  cfg:{provider:'alpaca',finnhub:'',alpacaKey:'',alpacaSecret:'',gistToken:'',gistId:'',refresh:30,proj:{monthly:500,ret:8,vol:16,years:20,target:0}},
   updatedAt:0
 };
 let S=load();
@@ -405,9 +415,13 @@ function marketStatus(){
 }
 
 /* ===================================================================
-   QUOTES (Finnhub)
+   QUOTES — provider layer. Every provider fills Q[sym] with:
+   c current price · pc previous close · d/dp change vs pc ·
+   t unix seconds of last trade · rc today's regular-session close if known
 =================================================================== */
-async function fq(path){
+function hasKey(){ return S.cfg.provider==='alpaca' ? !!(S.cfg.alpacaKey&&S.cfg.alpacaSecret) : !!S.cfg.finnhub; }
+
+async function fq(path){ // Finnhub
   const key=S.cfg.finnhub; if(!key) throw new Error('nokey');
   const r=await fetch(`https://finnhub.io/api/v1/${path}${path.includes('?')?'&':'?'}token=${encodeURIComponent(key)}`);
   if(r.status===429) throw new Error('Rate limit — slow the refresh interval');
@@ -415,12 +429,39 @@ async function fq(path){
   if(!r.ok) throw new Error('Finnhub error '+r.status);
   return r.json();
 }
+async function fa(url){ // Alpaca
+  if(!S.cfg.alpacaKey||!S.cfg.alpacaSecret) throw new Error('nokey');
+  const r=await fetch(url,{headers:{'APCA-API-KEY-ID':S.cfg.alpacaKey,'APCA-API-SECRET-KEY':S.cfg.alpacaSecret}});
+  if(r.status===429) throw new Error('Rate limit — slow the refresh interval');
+  if(r.status===401||r.status===403) throw new Error('Alpaca rejected the API keys');
+  if(!r.ok) throw new Error('Alpaca error '+r.status);
+  return r.json();
+}
+
+async function fetchQuotesFinnhub(syms){
+  const res=await Promise.all(syms.map(s=>fq('quote?symbol='+encodeURIComponent(s))));
+  res.forEach((q,i)=>{ if(q&&q.c) Q[syms[i]]={c:q.c,pc:q.pc,d:q.d??(q.c-q.pc),dp:q.dp??((q.c-q.pc)/q.pc*100),t:q.t,rc:null}; });
+}
+async function fetchQuotesAlpaca(syms){
+  const j=await fa('https://data.alpaca.markets/v2/stocks/snapshots?symbols='+encodeURIComponent(syms.join(','))+'&feed=iex');
+  const d=today();
+  for(const s of syms){
+    const x=j[s]; if(!x||!x.latestTrade) continue;
+    const c=x.latestTrade.p, t=Math.floor(Date.parse(x.latestTrade.t)/1000);
+    const db=x.dailyBar, pdb=x.prevDailyBar;
+    let pc=null, rc=null;
+    if(db&&etParts(new Date(db.t)).d===d){ pc=pdb?pdb.c:null; rc=db.c; }   // today's bar exists
+    else if(db){ pc=db.c; }                                                  // session hasn't rolled: daily bar is yesterday
+    else if(pdb){ pc=pdb.c; }
+    if(pc==null) pc=c;
+    Q[s]={c,pc,d:c-pc,dp:pc?(c-pc)/pc*100:0,t,rc};
+  }
+}
 async function refreshQuotes(manual){
-  if(!S.cfg.finnhub||!S.holdings.length){render();return;}
+  if(!hasKey()||!S.holdings.length){render();return;}
   const syms=S.holdings.map(h=>h.t);
   try{
-    const res=await Promise.all(syms.map(s=>fq('quote?symbol='+encodeURIComponent(s))));
-    res.forEach((q,i)=>{ if(q&&q.c) Q[syms[i]]={c:q.c,d:q.d??(q.c-q.pc),dp:q.dp??((q.c-q.pc)/q.pc*100),pc:q.pc,h:q.h,l:q.l,t:q.t}; });
+    if(S.cfg.provider==='alpaca') await fetchQuotesAlpaca(syms); else await fetchQuotesFinnhub(syms);
     captureCloses();
     $('#lastUpd').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
     logValue(); checkAlerts(); render();
@@ -429,18 +470,42 @@ async function refreshQuotes(manual){
 }
 async function fetchMetrics(syms){
   const stale=syms.filter(s=>!M[s]||Date.now()-M[s].at>12*3600e3);
-  for(const s of stale){
-    try{
-      const r=await fq('stock/metric?symbol='+encodeURIComponent(s)+'&metric=all');
-      const m=r.metric||{}; M[s]={hi:m['52WeekHigh'],lo:m['52WeekLow'],at:Date.now()};
-    }catch(e){ M[s]={hi:null,lo:null,at:Date.now()}; }
-  }
+  if(!stale.length) return;
+  try{
+    if(S.cfg.provider==='alpaca'){
+      const start=new Date(Date.now()-366*864e5).toISOString().slice(0,10);
+      let page=null, bars={};
+      do{
+        const j=await fa('https://data.alpaca.markets/v2/stocks/bars?symbols='+encodeURIComponent(stale.join(','))+'&timeframe=1Day&start='+start+'&limit=10000&feed=iex&adjustment=split'+(page?'&page_token='+encodeURIComponent(page):''));
+        for(const s in (j.bars||{})) bars[s]=(bars[s]||[]).concat(j.bars[s]);
+        page=j.next_page_token;
+      }while(page);
+      for(const s of stale){ const b=bars[s]||[]; M[s]={hi:b.length?Math.max(...b.map(x=>x.h)):null,lo:b.length?Math.min(...b.map(x=>x.l)):null,at:Date.now()}; }
+    } else {
+      for(const s of stale){
+        try{ const r=await fq('stock/metric?symbol='+encodeURIComponent(s)+'&metric=all'); const m=r.metric||{}; M[s]={hi:m['52WeekHigh'],lo:m['52WeekLow'],at:Date.now()}; }
+        catch(e){ M[s]={hi:null,lo:null,at:Date.now()}; }
+      }
+    }
+  }catch(e){ for(const s of stale) M[s]={hi:null,lo:null,at:Date.now()}; }
   try{sessionStorage.setItem('ledger.metrics',JSON.stringify(M));}catch(e){}
   render();
 }
 async function lookupName(sym){
+  if(S.cfg.provider==='alpaca'){
+    for(const host of ['https://paper-api.alpaca.markets','https://api.alpaca.markets']){
+      try{ const r=await fa(host+'/v2/assets/'+encodeURIComponent(sym)); if(r&&r.name) return r.name; }catch(e){}
+    }
+    return '';
+  }
   try{const r=await fq('stock/profile2?symbol='+encodeURIComponent(sym)); if(r&&r.name) return r.name;}catch(e){}
   return '';
+}
+async function lookupPrice(sym){
+  try{
+    if(S.cfg.provider==='alpaca'){ const j=await fa('https://data.alpaca.markets/v2/stocks/'+encodeURIComponent(sym)+'/trades/latest?feed=iex'); return j&&j.trade?j.trade.p:null; }
+    const r=await fq('quote?symbol='+encodeURIComponent(sym)); return r&&r.c?r.c:null;
+  }catch(e){ return null; }
 }
 function schedule(){
   clearInterval(timer);
@@ -473,6 +538,7 @@ function extInfo(){
     if(!traded) ref=q.c;                                   // quote is still the last regular close
     else if(pre) ref=q.pc;                                 // pre-market: vs yesterday's close
     else if(C[h.t]&&C[h.t].d===d) ref=C[h.t].p;            // after hours: vs captured 4 pm close
+    else if(q.rc!=null) ref=q.rc;                          // or the provider's daily-bar close
     else {ref=q.pc; haveAll=false;}
     if(traded) anyExt=true;
     const chg=(q.c-ref)*sh; extChg+=chg; base+=ref*sh; regChg+=(ref-q.pc)*sh;
@@ -493,7 +559,7 @@ function renderExt(){
     </div>
     <div class="syms">${x.rows.map(r=>`<span><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span></span>`).join('')}</div>
     ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported yet — prices shown are the last regular-session close.</p>'}
-    ${x.haveAll?'':'<p class="note">Today\'s 4 pm close wasn\'t captured (the app wasn\'t open during the session), so the after-hours move is measured from yesterday\'s close.</p>'}`;
+    ${x.haveAll?'':'<p class="note">Today\'s 4 pm close isn\'t available, so the after-hours move is measured from yesterday\'s close.</p>'}`;
 }
 
 /* ===================================================================
@@ -511,7 +577,7 @@ function render(){
   renderExt();
 
   // setup notice
-  const missing=[]; if(!S.cfg.finnhub) missing.push('add a Finnhub key for live prices'); if(!S.cfg.gistToken) missing.push('add a GitHub token to sync between devices');
+  const missing=[]; if(!hasKey()) missing.push('add '+(S.cfg.provider==='finnhub'?'a Finnhub key':'your Alpaca API keys')+' for live prices'); if(!S.cfg.gistToken) missing.push('add a GitHub token to sync between devices');
   $('#setupNotice').style.display=missing.length?'':'none';
   $('#setupText').textContent=missing.length?missing.map((m,i)=>(i?' and ':'')+m).join('').replace(/^./,c=>c.toUpperCase())+'.':'';
   $('#setupNotice').querySelector('h3').textContent=missing.length===2?'Two things to finish setup':'One thing to finish setup';
@@ -590,13 +656,15 @@ function renderAlloc(T){
 }
 function renderSettings(){
   if(document.activeElement&&document.activeElement.closest('#tab-settings,#tab-projection'))return;
-  $('#sKey').value=S.cfg.finnhub; $('#sRefresh').value=S.cfg.refresh; $('#sTok').value=S.cfg.gistToken; $('#sGist').value=S.cfg.gistId;
+  $('#sProv').value=S.cfg.provider||'alpaca'; $('#sKey').value=S.cfg.finnhub; $('#sAKey').value=S.cfg.alpacaKey||''; $('#sASec').value=S.cfg.alpacaSecret||''; $('#sRefresh').value=S.cfg.refresh; $('#sTok').value=S.cfg.gistToken; $('#sGist').value=S.cfg.gistId;
+  $('#provAlpaca').style.display=S.cfg.provider==='finnhub'?'none':''; $('#provFinnhub').style.display=S.cfg.provider==='finnhub'?'':'none';
   const p=S.cfg.proj; $('#pMonthly').value=p.monthly; $('#pRet').value=p.ret; $('#pVol').value=p.vol; $('#pYears').value=p.years; $('#pTarget').value=p.target||'';
 }
-['sKey','sRefresh','sTok','sGist'].forEach(id=>$('#'+id).addEventListener('change',()=>{
-  S.cfg.finnhub=$('#sKey').value.trim(); S.cfg.refresh=Math.max(5,+$('#sRefresh').value||30);
-  S.cfg.gistToken=$('#sTok').value.trim(); S.cfg.gistId=$('#sGist').value.trim();
-  save(false); schedule(); if(id==='sKey') refreshQuotes(); if(id==='sTok'||id==='sGist') syncPull();
+['sProv','sKey','sAKey','sASec','sRefresh','sTok','sGist'].forEach(id=>$('#'+id).addEventListener('change',()=>{
+  S.cfg.provider=$('#sProv').value; S.cfg.finnhub=$('#sKey').value.trim(); S.cfg.alpacaKey=$('#sAKey').value.trim(); S.cfg.alpacaSecret=$('#sASec').value.trim();
+  S.cfg.refresh=Math.max(5,+$('#sRefresh').value||30); S.cfg.gistToken=$('#sTok').value.trim(); S.cfg.gistId=$('#sGist').value.trim();
+  if(id==='sProv'){ Q={}; M={}; }
+  save(false); schedule(); if(['sProv','sKey','sAKey','sASec'].includes(id)) refreshQuotes(); if(id==='sTok'||id==='sGist') syncPull();
 }));
 ['pMonthly','pRet','pVol','pYears','pTarget'].forEach(id=>$('#'+id).addEventListener('input',()=>{
   const p=S.cfg.proj; p.monthly=+$('#pMonthly').value||0; p.ret=+$('#pRet').value||0; p.vol=+$('#pVol').value||0; p.years=Math.min(50,Math.max(1,+$('#pYears').value||1)); p.target=+$('#pTarget').value||0;
@@ -616,7 +684,7 @@ function openTrade(t,side){
   const isNew=!h;
   modal(`<h2>${side==='buy'?(isNew?'Add holding':'Buy more '+esc(t)):'Sell '+esc(t)}</h2>
     <div class="grid g2">
-      ${isNew?`<label class="field">Symbol<input id="tSym" placeholder="e.g. AAPL" style="text-transform:uppercase"></label>`:''}
+      ${isNew?`<label class="field">Symbol<input id="tSym" placeholder="e.g. AAPL" style="text-transform:uppercase"></label><label class="field">Name (optional)<input id="tName" placeholder="filled in automatically"></label>`:''}
       <label class="field">Shares<input id="tQty" type="number" step="0.001" min="0" placeholder="0.000"></label>
       <label class="field">Price per share ($)<input id="tPx" type="number" step="0.01" min="0" value="${q?q.c.toFixed(2):''}" placeholder="0.00"></label>
       <label class="field">Date<input id="tDate" type="date" value="${today()}"></label>
@@ -632,7 +700,7 @@ function openTrade(t,side){
     $('#tPrev').innerHTML=s;
   };
   ['tQty','tPx'].forEach(id=>$('#'+id).addEventListener('input',upd));
-  if(isNew){ $('#tSym').addEventListener('change',async()=>{ const s=$('#tSym').value.trim().toUpperCase(); if(!s||!S.cfg.finnhub)return; try{const r=await fq('quote?symbol='+s); if(r&&r.c&&!$('#tPx').value)$('#tPx').value=r.c.toFixed(2); upd();}catch(e){} }); }
+  if(isNew){ $('#tSym').addEventListener('change',async()=>{ const s=$('#tSym').value.trim().toUpperCase(); if(!s||!hasKey())return; const px=await lookupPrice(s); if(px&&!$('#tPx').value){$('#tPx').value=px.toFixed(2);upd();} if(!$('#tName').value){const n=await lookupName(s); if(n)$('#tName').value=n;} }); }
 }
 function fifoPreview(h,qty,px){
   let rem=qty, cost=0; const lots=h.lots.slice().sort((a,b)=>a.d<b.d?-1:1);
@@ -645,7 +713,7 @@ async function commitTrade(side,t){
   let h;
   if(side==='buy'){
     if(t) h=S.holdings.find(x=>x.t===t);
-    else { const sym=$('#tSym').value.trim().toUpperCase(); if(!sym) return alert('Enter a symbol.'); h=S.holdings.find(x=>x.t===sym); if(!h){h={t:sym,name:'',lots:[]};S.holdings.push(h); lookupName(sym).then(n=>{if(n){h.name=n;save(false);}}); } }
+    else { const sym=$('#tSym').value.trim().toUpperCase(); if(!sym) return alert('Enter a symbol.'); h=S.holdings.find(x=>x.t===sym); if(!h){h={t:sym,name:($('#tName').value||'').trim(),lots:[]};S.holdings.push(h); if(!h.name) lookupName(sym).then(n=>{if(n){h.name=n;save(false);}}); } }
     h.lots.push({d,q:qy,p:px});
     if(useCash) S.cash=Math.round((S.cash-qy*px)*100)/100;
   } else {
