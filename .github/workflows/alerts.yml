@@ -7,6 +7,11 @@ on:
     - cron: "*/15 8-23 * * 1-5"
     - cron: "*/15 0 * * 2-6"
   workflow_dispatch:      # lets you run it by hand from the Actions tab
+    inputs:
+      test:
+        description: "Send a test notification to your phone"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,4 +33,5 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           CLOSE_SUMMARY: ${{ vars.CLOSE_SUMMARY || '1' }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          TEST: ${{ inputs.test == true && '1' || '0' }}
         run: python alerts.py
