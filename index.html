@@ -374,7 +374,8 @@ const money=(n,d=2)=>n==null||isNaN(n)?'—':(n<0?'−':'')+'$'+fmt(Math.abs(n),
 const signed=(n,d=2)=>n==null||isNaN(n)?'—':(n>=0?'+':'−')+'$'+fmt(Math.abs(n),d);
 const pct=(n,d=2)=>n==null||isNaN(n)?'—':(n>=0?'+':'−')+fmt(Math.abs(n),d)+'%';
 const cls=n=>n>0?'up':n<0?'down':'';
-const today=()=>new Date().toISOString().slice(0,10);
+function etParts(dt){const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit',hour:'numeric',minute:'numeric',hour12:false}).formatToParts(dt);const g=t=>f.find(p=>p.type===t).value;return {d:`${g('year')}-${g('month')}-${g('day')}`,m:(+g('hour')%24)*60+ +g('minute')};}
+const today=()=>etParts(new Date()).d;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 function shares(h){return h.lots.reduce((a,l)=>a+l.q,0)}
@@ -461,16 +462,23 @@ function captureCloses(){
 function extInfo(){
   const st=marketStatus(); if(st.k!=='ext')return null;
   const pre=st.txt==='Pre-market', d=today();
-  let extChg=0,regChg=0,base=0,haveAll=true,rows=[];
+  let extChg=0,regChg=0,base=0,haveAll=true,anyExt=false,rows=[];
   for(const h of S.holdings){
     const q=Q[h.t]; if(!q){haveAll=false;continue;}
     const sh=shares(h);
-    let ref; if(pre) ref=q.pc; else if(C[h.t]&&C[h.t].d===d) ref=C[h.t].p; else {ref=q.pc; haveAll=false;}
+    // Has this quote actually traded in the current extended session?
+    const qt=q.t?etParts(new Date(q.t*1000)):null;
+    const traded=qt&&qt.d===d&&(pre?qt.m<570:qt.m>960);
+    let ref;
+    if(!traded) ref=q.c;                                   // quote is still the last regular close
+    else if(pre) ref=q.pc;                                 // pre-market: vs yesterday's close
+    else if(C[h.t]&&C[h.t].d===d) ref=C[h.t].p;            // after hours: vs captured 4 pm close
+    else {ref=q.pc; haveAll=false;}
+    if(traded) anyExt=true;
     const chg=(q.c-ref)*sh; extChg+=chg; base+=ref*sh; regChg+=(ref-q.pc)*sh;
-    rows.push({t:h.t,c:q.c,chg:q.c-ref,pct:ref?(q.c-ref)/ref*100:0});
+    rows.push({t:h.t,c:q.c,chg:q.c-ref,pct:ref?(q.c-ref)/ref*100:0,traded});
   }
-  const cashPlus=S.cash;
-  return {pre,extChg,extPct:base+cashPlus?extChg/(base+cashPlus)*100:0,regClose:base+cashPlus,regChg,total:totals().total,haveAll,rows};
+  return {pre,extChg,extPct:base+S.cash?extChg/(base+S.cash)*100:0,regClose:base+S.cash,regChg,total:totals().total,haveAll,anyExt,rows};
 }
 function renderExt(){
   const el=$('#ext'), x=extInfo();
@@ -484,6 +492,7 @@ function renderExt(){
       <span>${x.pre?'Yesterday\'s close':'Regular-session close'} <b class="num">${money(x.regClose)}</b></span>
     </div>
     <div class="syms">${x.rows.map(r=>`<span><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span></span>`).join('')}</div>
+    ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported yet — prices shown are the last regular-session close.</p>'}
     ${x.haveAll?'':'<p class="note">Today\'s 4 pm close wasn\'t captured (the app wasn\'t open during the session), so the after-hours move is measured from yesterday\'s close.</p>'}`;
 }
 
@@ -498,7 +507,7 @@ function render(){
   const g=$('#hGain'); g.textContent=`${signed(T.gain)} (${pct(T.cost?T.gain/T.cost*100:0)})`; g.className='num '+cls(T.gain);
   $('#hCash').textContent=money(S.cash);
   $('#mDot').className='dot '+st.k; $('#mText').textContent=st.txt;
-  const x=extInfo(); if(x&&!x.pre&&x.haveAll){ d.textContent=`${signed(x.regChg)} (${pct(x.regClose-x.regChg?x.regChg/(x.regClose-x.regChg)*100:0)})`; d.className='num '+cls(x.regChg); d.previousElementSibling.textContent='Regular session'; } else d.previousElementSibling.textContent='Today';
+  const x=extInfo(); if(x&&!x.pre&&x.haveAll&&x.anyExt){ d.textContent=`${signed(x.regChg)} (${pct(x.regClose-x.regChg?x.regChg/(x.regClose-x.regChg)*100:0)})`; d.className='num '+cls(x.regChg); d.previousElementSibling.textContent='Regular session'; } else d.previousElementSibling.textContent='Today';
   renderExt();
 
   // setup notice
