@@ -15,6 +15,7 @@ Required environment variables (set as GitHub repository secrets):
   NTFY_TOPIC     your private ntfy topic name
 Optional:
   NTFY_SERVER    default https://ntfy.sh
+  TEST           "1" sends a test notification and exits
   CLOSE_SUMMARY  "1" to also send a daily summary just after the 4 PM close
 """
 import json, os, sys, urllib.request, urllib.error
@@ -50,8 +51,16 @@ def pct(n):
     return ("+" if n >= 0 else "-") + "{:.2f}%".format(abs(n))
 
 
-# ---------------------------------------------------------------- market hours
+# ---------------------------------------------------------------- test mode
 now = datetime.now(ET)
+if os.environ.get("TEST") == "1":
+    topic = env("NTFY_TOPIC"); server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+    http(f"{server}/{topic}", {"Title": "Ledger", "Priority": "high", "Tags": "white_check_mark"},
+         f"Test notification sent {now:%-I:%M %p} ET — alerts are wired up.".encode(), "POST")
+    print("test notification sent to topic", topic)
+    sys.exit(0)
+
+# ---------------------------------------------------------------- market hours
 minutes = now.hour * 60 + now.minute
 weekday = now.weekday() < 5
 in_session = weekday and 240 <= minutes < 1200  # 4:00 AM – 8:00 PM ET
