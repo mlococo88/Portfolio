@@ -380,7 +380,7 @@ const SEED={
 let S=load();
 let Q={};          // quotes by symbol
 let M={};          // 52wk metrics by symbol {hi,lo,at}
-let timer=null, syncTimer=null, openLots={};
+let timer=null, syncTimer=null, openLots={}, lastPull=0;
 
 function load(){
   try{const r=localStorage.getItem(LS_KEY); if(r){const s=JSON.parse(r); return Object.assign(JSON.parse(JSON.stringify(SEED)),s,{cfg:Object.assign({},SEED.cfg,s.cfg||{},{proj:Object.assign({},SEED.cfg.proj,(s.cfg||{}).proj||{})})});}}catch(e){}
@@ -541,7 +541,7 @@ function schedule(){
   const ms=Math.max(5,+S.cfg.refresh||30)*1000;
   timer=setInterval(()=>{ if(document.visibilityState==='visible'){ const st=marketStatus(); if(st.k!=='closed'||!Q[(S.holdings[0]||{}).t]) refreshQuotes(); } },ms);
 }
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshQuotes();});
+document.addEventListener('visibilitychange',async()=>{ if(document.visibilityState!=='visible')return; if(S.cfg.gistToken&&S.cfg.gistId&&Date.now()-lastPull>60000) await syncPull(false); refreshQuotes(); });
 
 /* ===================================================================
    EXTENDED HOURS
@@ -948,6 +948,7 @@ async function syncPull(manual){
   if(!S.cfg.gistToken||!S.cfg.gistId){ if(manual)setSync('Add a token and Gist ID first',true); return; }
   try{
     setSync('Checking Gist…');
+    lastPull=Date.now();
     const r=await fetch(`${GH}/gists/${S.cfg.gistId}`,{headers:ghHeaders(),cache:'no-store'});
     if(!r.ok) throw new Error(r.status===401?'GitHub token rejected':r.status===404?'Gist not found (check ID)':'GitHub error '+r.status);
     const j=await r.json(); const f=j.files&&j.files['ledger.json']; if(!f) throw new Error('Gist has no ledger.json');
