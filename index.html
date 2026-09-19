@@ -214,7 +214,8 @@ tr.lotrow td{padding:4px 8px}
 .proj .hover line{stroke:var(--ink-3);stroke-dasharray:2 3}
 .tip{position:absolute;pointer-events:none;background:var(--ink);color:#fff;font-size:12px;padding:6px 9px;border-radius:6px;white-space:nowrap;transform:translate(-50%,-110%);display:none;z-index:5}
 .tip b{font-weight:600}
-@media (max-width:760px){.seg button{padding:5px 7px;font-size:12px}.stats6{grid-template-columns:1fr 1fr 1fr}.stats6 .v{font-size:14px}}
+#tab-history .seg{flex-wrap:wrap}
+@media (max-width:760px){.seg button{padding:5px 6px;font-size:12px}#perfChart{height:300px!important}.stats6{grid-template-columns:1fr 1fr 1fr}.stats6 .v{font-size:14px}}
 .milestones{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:12px}
 .milestones>div{border:1px solid var(--line);border-radius:var(--r);padding:10px 12px}
 .milestones .y{font-size:12px;color:var(--ink-2)}
@@ -370,21 +371,21 @@ tr.lotrow td{padding:4px 8px}
   <div class="card">
     <div class="row spread" style="margin-bottom:8px">
       <h2 style="margin:0;flex:1">Performance</h2>
-      <div class="seg" id="hRange"><button data-r="1M">1M</button><button data-r="3M">3M</button><button data-r="6M">6M</button><button data-r="YTD">YTD</button><button data-r="1Y">1Y</button><button data-r="ALL" class="on">All</button></div>
+      <div class="seg" id="hRange"><button data-r="1D">1D</button><button data-r="5D">5D</button><button data-r="1M">1M</button><button data-r="3M">3M</button><button data-r="6M">6M</button><button data-r="YTD">YTD</button><button data-r="1Y">1Y</button><button data-r="ALL" class="on">All</button></div>
     </div>
+    <div class="row" style="margin-bottom:8px"><label class="field" style="min-width:180px">Show<select id="hSym"><option value="__all">Whole portfolio</option></select></label></div>
     <div class="stats6" id="hStats"></div>
     <div class="row" style="margin:10px 0 6px;gap:6px 14px;font-size:13px">
       <label><input type="checkbox" id="hBench" checked> Benchmark <input id="hBenchSym" value="VOO" style="width:64px;border:1px solid var(--line-2);border-radius:4px;padding:2px 6px;text-transform:uppercase"></label>
       <label><input type="checkbox" id="hStack"> By holding</label>
       <label><input type="checkbox" id="hBuys" checked> Buy markers</label>
     </div>
-    <div class="proj" id="perfChart" style="position:relative"></div>
-    <div class="legend" id="perfLegend" style="margin-top:8px"></div>
+    <div id="perfChart" style="width:100%;height:380px"></div>
     <p class="note" id="perfNote" style="margin-top:8px"></p>
   </div>
   <div class="card">
     <h3>Daily change</h3>
-    <div class="proj" id="dailyChart"></div>
+    <div id="dailyChart" style="width:100%;height:180px"></div>
   </div>
   <div class="card">
     <h2>Realized gains</h2>
@@ -834,7 +835,7 @@ function renderSettings(){
 /* ===================================================================
    TRADES / CASH
 =================================================================== */
-function modal(html){ $('#modalHost').innerHTML=`<div class="modal" onclick="if(event.target===this)closeModal()"><div class="box">${html}</div></div>`; const f=$('#modalHost input'); if(f) setTimeout(()=>f.focus(),50); }
+function modal(html){ $('#modalHost').innerHTML=`<div class="modal" onclick="if(event.target===this)closeModal()"><div class="box">${html}</div></div>`; const f=$('#modalHost input'); if(f) setTimeout(()=>{if(document.body.contains(f)) f.focus();},50); }
 function closeModal(){$('#modalHost').innerHTML='';}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
 
@@ -862,7 +863,7 @@ function openTrade(t,side){
   };
   ['tQty','tPx'].forEach(id=>$('#'+id).addEventListener('input',upd));
   $('#tMode').addEventListener('change',()=>{ const usd=$('#tMode').value==='usd'; $('#tQtyLbl').textContent=usd?'Amount ($)':'Shares'; $('#tQty').step=usd?'0.01':'0.001'; $('#tQty').placeholder=usd?'0.00':'0.000'; $('#tQty').value=''; upd(); $('#tQty').focus(); });
-  if(!isNew) setTimeout(()=>$('#tQty').focus(),60);
+  if(!isNew) setTimeout(()=>{const f=$('#tQty'); if(f) f.focus();},60);
   if(isNew){ $('#tSym').addEventListener('change',async()=>{ const s=$('#tSym').value.trim().toUpperCase(); if(!s||!hasKey())return; const px=await lookupPrice(s); if(px&&!$('#tPx').value){$('#tPx').value=px.toFixed(2);upd();} if(!$('#tName').value){const n=await lookupName(s); if(n)$('#tName').value=n;} }); }
 }
 function tradeVals(){
@@ -1007,109 +1008,152 @@ function logValue(){
   if(S.log.length>2000) S.log.splice(0,S.log.length-2000);
   localStorage.setItem(LS_KEY,JSON.stringify(S));
 }
-/* ---- performance history: reconstructed from lots + daily closes ---- */
-let hRange='ALL';
-function tradingDays(from){ // union of bar dates across symbols, from a start date
-  const set=new Set(); for(const x in HB) for(const d of HB[x].d) if(d>=from) set.add(d);
-  return [...set].sort();
-}
-function closeOn(sym,d){ // last close on or before d (bars are sorted)
-  const b=HB[sym]; if(!b||!b.d.length) return null;
-  let lo=0,hi=b.d.length-1,ans=-1; while(lo<=hi){const m=(lo+hi)>>1; if(b.d[m]<=d){ans=m;lo=m+1;}else hi=m-1;}
-  return ans<0?null:b.c[ans];
-}
-function buildHistory(){
-  const lots=[]; // every purchase, including shares later sold (approximated as bought at the first lot date)
-  for(const h of S.holdings) for(const l of h.lots) lots.push({t:h.t,d:l.d,q:l.q,cost:l.q*l.p});
+/* ---- performance history: reconstructed from lots + daily closes, Plotly ---- */
+let hRange='ALL', plotlyReady=null;
+let IB={}; // intraday cache: key sym|tf|start -> {t:[],c:[],at}
+function loadPlotly(){ if(window.Plotly) return Promise.resolve(); if(plotlyReady) return plotlyReady;
+  plotlyReady=new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src='https://cdn.plot.ly/plotly-2.35.2.min.js'; sc.onload=res; sc.onerror=()=>rej(new Error('Plotly failed to load')); document.head.appendChild(sc); }); return plotlyReady; }
+function tradingDays(from){ const set=new Set(); for(const x in HB) for(const d of HB[x].d) if(d>=from) set.add(d); return [...set].sort(); }
+function closeOn(sym,d){ const b=HB[sym]; if(!b||!b.d.length) return null; let lo=0,hi=b.d.length-1,ans=-1; while(lo<=hi){const m=(lo+hi)>>1; if(b.d[m]<=d){ans=m;lo=m+1;}else hi=m-1;} return ans<0?null:b.c[ans]; }
+function selectedSym(){ const v=($('#hSym')||{}).value||'__all'; return v==='__all'?null:v; }
+function buildHistory(only){
+  const lots=[];
+  for(const h of S.holdings) if(!only||h.t===only) for(const l of h.lots) lots.push({t:h.t,d:l.d,q:l.q,cost:l.q*l.p});
   const firstLot=lots.length?lots.map(l=>l.d).sort()[0]:today();
-  for(const x of S.sold) lots.push({t:x.t,d:firstLot,q:x.q,cost:x.cost,soldOn:x.d,proceeds:x.q*x.p});
+  for(const x of S.sold) if(!only||x.t===only) lots.push({t:x.t,d:firstLot,q:x.q,cost:x.cost,soldOn:x.d,proceeds:x.q*x.p});
   if(!lots.length) return null;
   const start=lots.map(l=>l.d).sort()[0];
-  const days=tradingDays(start); const td=today(); if(!days.includes(td)&&days.length) days.push(td);
+  const days=tradingDays(start); const td=today(); if(!days.includes(td)) days.push(td);
   const syms=[...new Set(lots.map(l=>l.t))];
   const bench=($('#hBenchSym').value||'VOO').trim().toUpperCase();
   const V=[],I=[],B=[],per={}; syms.forEach(t=>per[t]=[]);
-  let bShares=0, bLotIdx=0; const lotsByDate=lots.slice().sort((a,b)=>a.d<b.d?-1:1);
+  let bShares=0,bLotIdx=0; const lotsByDate=lots.slice().sort((a,b)=>a.d<b.d?-1:1);
   for(const d of days){
     let v=0,inv=0;
-    for(const t of syms){
-      let sh=0; for(const l of lots) if(l.t===t&&l.d<=d&&!(l.soldOn&&l.soldOn<=d)) sh+=l.q;
-      const c=d===td&&Q[t]?Q[t].c:closeOn(t,d); const val=c!=null?sh*c:0; per[t].push(val); v+=val;
-    }
+    for(const t of syms){ let sh=0; for(const l of lots) if(l.t===t&&l.d<=d&&!(l.soldOn&&l.soldOn<=d)) sh+=l.q;
+      const c=d===td&&Q[t]?Q[t].c:closeOn(t,d); const val=c!=null?sh*c:0; per[t].push(val); v+=val; }
     for(const l of lots){ if(l.d<=d) inv+=l.cost; if(l.soldOn&&l.soldOn<=d) inv-=l.cost; }
-    // benchmark: same dollars, same dates, into the benchmark symbol
     while(bLotIdx<lotsByDate.length&&lotsByDate[bLotIdx].d<=d){ const l=lotsByDate[bLotIdx++]; const bc=closeOn(bench,l.d); if(bc) bShares+=l.cost/bc; }
     for(const l of lots) if(l.soldOn===d){ const bc=closeOn(bench,d); if(bc) bShares-=l.cost/bc; }
     const bc=d===td&&Q[bench]?Q[bench].c:closeOn(bench,d);
     V.push(v); I.push(inv); B.push(bc!=null&&HB[bench]?bShares*bc:null);
   }
-  const buys=lots.filter(l=>!l.soldOn).map(l=>({d:l.d,t:l.t,cost:l.cost}));
-  return {days,V,I,B,per,syms,buys,bench,hasBench:!!HB[bench]};
+  return {days,V,I,B,per,syms,buys:lots.filter(l=>!l.soldOn),bench,hasBench:!!HB[bench]};
 }
-function xirr(flows){ // flows: [{d,a}] ; returns annual rate or null
-  if(flows.length<2) return null;
-  const t0=Date.parse(flows[0].d); const yrs=flows.map(f=>(Date.parse(f.d)-t0)/(365.25*864e5));
-  const f=r=>flows.reduce((s,fl,i)=>s+fl.a/Math.pow(1+r,yrs[i]),0);
-  let lo=-0.99,hi=10; if(f(lo)*f(hi)>0) return null;
-  for(let k=0;k<100;k++){const m=(lo+hi)/2; if(f(lo)*f(m)<=0)hi=m;else lo=m;}
-  return (lo+hi)/2;
+function xirr(flows){ if(flows.length<2) return null; const t0=Date.parse(flows[0].d); const yrs=flows.map(f=>(Date.parse(f.d)-t0)/(365.25*864e5));
+  const f=r=>flows.reduce((s,fl,i)=>s+fl.a/Math.pow(1+r,yrs[i]),0); let lo=-0.99,hi=10; if(f(lo)*f(hi)>0) return null;
+  for(let k=0;k<100;k++){const m=(lo+hi)/2; if(f(lo)*f(m)<=0)hi=m;else lo=m;} return (lo+hi)/2; }
+
+/* intraday (1D / 5D) */
+async function fetchIntraday(syms,tf,startISO){
+  const key=syms.join(',')+'|'+tf+'|'+startISO; if(IB[key]&&Date.now()-IB[key].at<120e3) return IB[key].data;
+  let page=null, bars={};
+  do{ const j=await fa('https://data.alpaca.markets/v2/stocks/bars?symbols='+encodeURIComponent(syms.join(','))+'&timeframe='+tf+'&start='+encodeURIComponent(startISO)+'&limit=10000&feed=iex'+(page?'&page_token='+encodeURIComponent(page):''));
+    for(const x in (j.bars||{})) bars[x]=(bars[x]||[]).concat(j.bars[x]); page=j.next_page_token; }while(page);
+  IB[key]={data:bars,at:Date.now()}; return bars;
 }
-function renderHist(){
-  if(!$('#tab-history').classList.contains('on'))return;
-  const el=$('#perfChart'), note=$('#perfNote');
-  const Hd=buildHistory();
-  if(!Hd||!Object.keys(HB).length){ el.innerHTML=''; $('#hStats').innerHTML=''; $('#dailyChart').innerHTML=''; $('#perfLegend').innerHTML='';
-    note.textContent=hasKey()?(S.holdings.length?'Loading price history…':'Add a holding to see performance.'):'Add Alpaca keys in Settings to load price history.'; return; }
-  // range
-  const td=today(), dt=new Date(td+'T12:00:00'); let from='0000';
-  const back=(m)=>{const x=new Date(dt);x.setMonth(x.getMonth()-m);return x.toISOString().slice(0,10);};
-  if(hRange==='1M')from=back(1); if(hRange==='3M')from=back(3); if(hRange==='6M')from=back(6); if(hRange==='1Y')from=back(12); if(hRange==='YTD')from=td.slice(0,4)+'-01-01';
-  let i0=Hd.days.findIndex(d=>d>=from); if(i0<0)i0=0; if(i0>0)i0--; // include the point just before the range so the line starts at the edge
-  const days=Hd.days.slice(i0), V=Hd.V.slice(i0), I=Hd.I.slice(i0), B=Hd.B.slice(i0), N=days.length-1;
-  const showBench=$('#hBench').checked&&Hd.hasBench, stack=$('#hStack').checked, showBuys=$('#hBuys').checked;
-  // chart
-  const mob=isMobile(), W=mob?420:800, Hh=mob?240:320, pl=mob?50:64, pr=12, pt=14, pb=28;
-  const all=[...V,...I,...(showBench?B.filter(x=>x!=null):[])]; const lo=0, hi=Math.max(...all,1)*1.06;
-  const X=i=>pl+(W-pl-pr)*(N?i/N:0), Y=v=>pt+(Hh-pt-pb)*(1-(v-lo)/(hi-lo));
-  const line=arr=>arr.map((v,i)=>v==null?'':(i&&arr[i-1]!=null?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' ');
-  let body='';
-  if(stack){
-    let acc=new Array(N+1).fill(0);
-    Hd.syms.forEach((t,k)=>{ const ser=Hd.per[t].slice(i0); const top=acc.map((a,i)=>a+ser[i]);
-      body+=`<path d="M${top.map((v,i)=>X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' L')} L${acc.slice().reverse().map((v,i)=>X(N-i).toFixed(1)+' '+Y(v).toFixed(1)).join(' L')} Z" fill="${COLORS[(k+1)%COLORS.length]}" opacity=".8"/>`; acc=top; });
-  } else {
-    // gain / loss shading between value and invested
-    let segs=''; for(let i=0;i<N;i++){ const g=V[i]>=I[i]; const g2=V[i+1]>=I[i+1]; const cls=g&&g2?'gain':(!g&&!g2?'loss':(V[i+1]>=I[i+1]?'gain':'loss'));
-      segs+=`<path class="${cls}" d="M${X(i)} ${Y(V[i])} L${X(i+1)} ${Y(V[i+1])} L${X(i+1)} ${Y(I[i+1])} L${X(i)} ${Y(I[i])} Z"/>`; }
-    body+=segs+`<path class="invested" d="${line(I)}"/><path class="median" d="${line(V)}"/>`;
+function etStamp(iso){ const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(new Date(iso)); const g=t=>f.find(p=>p.type===t).value; return `${g('year')}-${g('month')}-${g('day')} ${(+g('hour'))%24<10?'0':''}${(+g('hour'))%24}:${g('minute')}`; }
+async function buildIntraday(only,n){
+  const syms=(only?[only]:S.holdings.map(h=>h.t)); if(!syms.length) return null;
+  const tf=n===1?'5Min':'15Min';
+  const startISO=new Date(Date.now()-(n===1?6:12)*864e5).toISOString().slice(0,10)+'T00:00:00Z';
+  const raw=await fetchIntraday(syms,tf,startISO);
+  // trading days present in the data (Eastern), take the last n plus the one before as the reference day
+  const dates=new Set(); for(const x of syms) for(const b of (raw[x]||[])) dates.add(etStamp(b.t).slice(0,10));
+  const all=[...dates].sort(); if(!all.length) return null;
+  const days=all.slice(-n), prevDay=all[all.length-n-1]||null, dset=new Set(days);
+  const bars={}; for(const x of syms) bars[x]=(raw[x]||[]).filter(b=>dset.has(etStamp(b.t).slice(0,10)));
+  const ts=new Set(); for(const x of syms) for(const b of bars[x]) ts.add(b.t); const T=[...ts].sort(); if(!T.length) return null;
+  const sh=Object.fromEntries(syms.map(t=>[t,shares(S.holdings.find(h=>h.t===t))]));
+  const idx=Object.fromEntries(syms.map(t=>[t,0])), last={};
+  let ref=0;
+  for(const x of syms){
+    // prior close: the daily close from the cache if we have it, else the last bar of the previous day, else the quote's previous close
+    let c=prevDay?closeOn(x,prevDay):null;
+    if(c==null&&prevDay){ const pb=(raw[x]||[]).filter(b=>etStamp(b.t).slice(0,10)===prevDay); if(pb.length) c=pb[pb.length-1].c; }
+    if(c==null) c=Q[x]?Q[x].pc:0;
+    last[x]=c; ref+=c*sh[x];
   }
-  if(showBench) body+=`<path class="bench" d="${line(B)}"/>`;
-  if(showBuys&&!stack) for(const bY of Hd.buys){ const i=days.indexOf(bY.d); if(i>=0) body+=`<circle class="buy" cx="${X(i)}" cy="${Y(V[i])}" r="${mob?3:3.5}"><title>${bY.d} · ${bY.t} ${money(bY.cost)}</title></circle>`; }
-  const ticks=Array.from({length:5},(_,i)=>lo+(hi-lo)*i/4);
-  const nx=mob?3:6, xt=Array.from({length:nx+1},(_,i)=>Math.round(N*i/nx));
-  const fdate=d=>new Date(d+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric',year:N>250?'2-digit':undefined});
-  el.innerHTML=`<svg viewBox="0 0 ${W} ${Hh}" id="perfSvg"><g class="grid">${ticks.map(t=>`<line x1="${pl}" x2="${W-pr}" y1="${Y(t)}" y2="${Y(t)}"/>`).join('')}</g>
-    ${ticks.map(t=>`<text class="axis" x="${pl-6}" y="${Y(t)+4}" text-anchor="end">${moneyK(t)}</text>`).join('')}
-    ${xt.map(i=>`<text class="axis" x="${X(i)}" y="${Hh-8}" text-anchor="${i===0?'start':i===N?'end':'middle'}">${days[i]?fdate(days[i]):''}</text>`).join('')}
-    ${body}<g class="hover" id="perfHover"></g></svg><div class="tip" id="perfTip"></div>`;
-  $('#perfLegend').innerHTML=stack?Hd.syms.map((t,k)=>`<span><i style="background:${COLORS[(k+1)%COLORS.length]}"></i>${esc(t)}</span>`).join(''):
-    `<span><i style="background:var(--accent)"></i>Value</span><span><i style="background:var(--ink-2)"></i>Money in</span>${showBench?`<span><i style="background:var(--warn)"></i>Same buys in ${esc(Hd.bench)}</span>`:''}${showBuys?'<span><i style="background:var(--accent);border-radius:50%"></i>Buy</span>':''}`;
-  // hover
-  const svg=$('#perfSvg'), tip=$('#perfTip'), hov=$('#perfHover');
-  const onmove=ev=>{ const r=svg.getBoundingClientRect(); const px=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left; const i=Math.max(0,Math.min(N,Math.round((px/r.width*W-pl)/(W-pl-pr)*N)));
-    hov.innerHTML=`<line x1="${X(i)}" x2="${X(i)}" y1="${pt}" y2="${Hh-pb}"/><circle cx="${X(i)}" cy="${Y(V[i])}" r="3.5" fill="var(--accent)"/>`;
-    const g=V[i]-I[i]; tip.innerHTML=`<b>${fdate(days[i])}</b> · ${money(V[i],0)} <span class="${g>=0?'':''}">${signed(g,0)}</span>${showBench&&B[i]!=null?` · ${esc(Hd.bench)} ${money(B[i],0)}`:''}`;
-    tip.style.left=(X(i)/W*r.width)+'px'; tip.style.top=(Y(V[i])/Hh*r.height)+'px'; tip.style.display='block'; };
-  svg.addEventListener('mousemove',onmove); svg.addEventListener('touchmove',onmove,{passive:true}); svg.addEventListener('touchstart',onmove,{passive:true});
-  svg.addEventListener('mouseleave',()=>{tip.style.display='none';hov.innerHTML='';});
-  // stats (over the selected range)
-  const v0=V[0], vN=V[N], i0v=I[0], iN=I[N]; const gainRange=(vN-iN)-(v0-i0v);
-  const flows=[]; for(const l of Hd.buys) if(l.d>=days[0]) flows.push({d:l.d,a:-l.cost}); for(const x of S.sold) if(x.d>=days[0]) flows.push({d:x.d,a:x.q*x.p});
+  const V=[]; for(const t of T){ let v=0; for(const x of syms){ const arr=bars[x]; while(idx[x]<arr.length&&arr[idx[x]].t<=t){ last[x]=arr[idx[x]].c; idx[x]++; } v+=(last[x]||0)*sh[x]; } V.push(v); }
+  return {T:T.map(etStamp),V,ref,days,syms};
+}
+
+async function renderHist(){
+  if(!$('#tab-history').classList.contains('on'))return;
+  const note=$('#perfNote'), only=selectedSym();
+  // symbol picker
+  const sel=$('#hSym'); const cur=sel.value; sel.innerHTML='<option value="__all">Whole portfolio</option>'+S.holdings.map(h=>`<option value="${esc(h.t)}">${esc(h.t)}${h.name?' — '+esc(h.name):''}</option>`).join(''); if([...sel.options].some(o=>o.value===cur)) sel.value=cur;
+  if(!hasKey()){ note.textContent='Add Alpaca keys in Settings to load price history.'; return; }
+  if(!Object.keys(HB).length){ note.textContent='Loading price history…'; return; }
+  try{ await loadPlotly(); }catch(e){ note.textContent=e.message; return; }
+  const mob=isMobile(), td=today();
+  const base={paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{family:'IBM Plex Sans, system-ui, sans-serif',size:mob?11:12,color:'#4e5b56'},
+    margin:{l:mob?48:60,r:12,t:8,b:mob?36:40},hovermode:'x unified',showlegend:true,legend:{orientation:'h',y:-0.18,x:0,font:{size:mob?11:12},traceorder:'normal'},
+    xaxis:{gridcolor:'#e6ebe9',zeroline:false,showspikes:true,spikemode:'across',spikethickness:1,spikecolor:'#8a9691',spikedash:'dot'},
+    yaxis:{gridcolor:'#e6ebe9',zeroline:false,tickprefix:'$',tickformat:',.0f',fixedrange:true}};
+  const cfg={displayModeBar:false,responsive:true,scrollZoom:false};
+  const fdate=d=>new Date(d+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric',year:'2-digit'});
+  const dailyEl=$('#dailyChart');
+
+  const intr=hRange==='1D'||hRange==='5D'; $('#hBench').closest('.row').style.display=intr?'none':'';
+  if(intr){
+    note.textContent='Loading intraday prices…';
+    let D; try{ D=await buildIntraday(only,hRange==='1D'?1:5); }catch(e){ note.textContent='Intraday: '+e.message; return; }
+    if(!D){ note.textContent='No intraday data yet for this range.'; return; }
+    const up=D.V[D.V.length-1]>=D.ref, col=up?'#177a46':'#b83c33';
+    const traces=[
+      {x:D.T,y:D.V,type:'scatter',mode:'lines',name:only||'Portfolio',line:{color:col,width:2},fill:'tozeroy',fillcolor:up?'rgba(23,122,70,.08)':'rgba(184,60,51,.08)',hovertemplate:'%{y:$,.2f}<extra></extra>'},
+      {x:[D.T[0],D.T[D.T.length-1]],y:[D.ref,D.ref],type:'scatter',mode:'lines',name:'Prior close',line:{color:'#8a9691',width:1,dash:'dot'},hoverinfo:'skip'}];
+    const lo=Math.min(...D.V,D.ref), hi=Math.max(...D.V,D.ref), pad=(hi-lo)*0.15||1;
+    // shade the pre-market and after-hours portions of each day
+    const shapes=[]; for(const d of D.days){ for(const [a,b] of [['04:00','09:30'],['16:00','20:00']]) shapes.push({type:'rect',xref:'x',yref:'paper',x0:d+' '+a,x1:d+' '+b,y0:0,y1:1,fillcolor:'rgba(138,150,145,.08)',line:{width:0},layer:'below'}); }
+    const layout=Object.assign({},base,{shapes,yaxis:Object.assign({},base.yaxis,{range:[lo-pad,hi+pad]}),
+      xaxis:Object.assign({},base.xaxis,{type:'date',tickformat:hRange==='1D'?'%-I:%M %p':'%a %-I%p',rangebreaks:[{bounds:['sat','mon']},{bounds:[20,4],pattern:'hour'}]})});
+    Plotly.react('perfChart',traces,layout,cfg);
+    const chg=D.V[D.V.length-1]-D.ref, first=D.V[0];
+    const hiV=Math.max(...D.V), loV=Math.min(...D.V);
+    $('#hStats').innerHTML=`<div><div class="k">${hRange==='1D'?'Today':'5 days'}</div><div class="v num ${cls(chg)}">${signed(chg)}</div><div class="s num">${D.ref?pct(chg/D.ref*100):''} vs prior close</div></div>
+      <div><div class="k">Now</div><div class="v num">${money(D.V[D.V.length-1])}</div><div class="s">${only?'position value':'holdings, excl. cash'}</div></div>
+      <div><div class="k">High</div><div class="v num">${money(hiV)}</div><div class="s"></div></div><div><div class="k">Low</div><div class="v num">${money(loV)}</div><div class="s"></div></div>
+      <div><div class="k">Range</div><div class="v num">${money(hiV-loV)}</div><div class="s num">${D.ref?fmt((hiV-loV)/D.ref*100,2)+'% swing':''}</div></div>`;
+    // per-day bars for 5D, per-hour for 1D
+    const buckets={}; D.T.forEach((t,i)=>{ const k=hRange==='1D'?t.slice(0,13):t.slice(0,10); if(!(k in buckets)) buckets[k]={first:D.V[i],last:D.V[i]}; buckets[k].last=D.V[i]; });
+    const ks=Object.keys(buckets); let prev=D.ref; const bx=[],by=[]; for(const k of ks){ bx.push(hRange==='1D'?k+':00':k); by.push(buckets[k].last-prev); prev=buckets[k].last; }
+    Plotly.react('dailyChart',[{x:bx,y:by,type:'bar',marker:{color:by.map(v=>v>=0?'#177a46':'#b83c33')},hovertemplate:'%{y:$,.2f}<extra></extra>'}],
+      Object.assign({},base,{showlegend:false,margin:{l:mob?48:60,r:12,t:4,b:30},xaxis:{type:hRange==='1D'?'date':'category',tickformat:'%-I %p',gridcolor:'#e6ebe9'},yaxis:Object.assign({},base.yaxis,{tickformat:'+,.0f'})}),cfg);
+    note.textContent=(hRange==='1D'?'5-minute':'15-minute')+' IEX bars; shaded areas are pre-market and after hours. '+(only?'':'Holdings only, excluding cash.');
+    return;
+  }
+
+  const Hd=buildHistory(only);
+  if(!Hd){ Plotly.purge('perfChart'); $('#hStats').innerHTML=''; note.textContent='Add a holding to see performance.'; return; }
+  const dt=new Date(td+'T12:00:00'); let from='0000'; const back=m=>{const x=new Date(dt);x.setMonth(x.getMonth()-m);return x.toISOString().slice(0,10);};
+  if(hRange==='1M')from=back(1); if(hRange==='3M')from=back(3); if(hRange==='6M')from=back(6); if(hRange==='1Y')from=back(12); if(hRange==='YTD')from=td.slice(0,4)+'-01-01';
+  let i0=Hd.days.findIndex(d=>d>=from); if(i0<0)i0=0; if(i0>0)i0--;
+  const days=Hd.days.slice(i0), V=Hd.V.slice(i0), I=Hd.I.slice(i0), B=Hd.B.slice(i0), N=days.length-1;
+  const showBench=$('#hBench').checked&&Hd.hasBench, stack=$('#hStack').checked&&!only, showBuys=$('#hBuys').checked;
+  const traces=[];
+  if(stack){ Hd.syms.forEach((t,k)=>traces.push({x:days,y:Hd.per[t].slice(i0),type:'scatter',mode:'lines',name:t,stackgroup:'one',line:{width:0.5,color:COLORS[(k+1)%COLORS.length]},fillcolor:COLORS[(k+1)%COLORS.length]+'cc',hovertemplate:'%{y:$,.0f}<extra>'+t+'</extra>'})); }
+  else{
+    const gainTop=V.map((v,i)=>Math.max(v,I[i])), lossBot=V.map((v,i)=>Math.min(v,I[i]));
+    traces.push({x:days,y:I,type:'scatter',mode:'lines',line:{width:0},hoverinfo:'skip',showlegend:false});
+    traces.push({x:days,y:gainTop,type:'scatter',mode:'lines',line:{width:0},fill:'tonexty',fillcolor:'rgba(23,122,70,.13)',hoverinfo:'skip',showlegend:false});
+    traces.push({x:days,y:I,type:'scatter',mode:'lines',line:{width:0},hoverinfo:'skip',showlegend:false});
+    traces.push({x:days,y:lossBot,type:'scatter',mode:'lines',line:{width:0},fill:'tonexty',fillcolor:'rgba(184,60,51,.15)',hoverinfo:'skip',showlegend:false});
+    traces.push({x:days,y:V,type:'scatter',mode:'lines',name:only?only+' value':'Value',line:{color:'#0f5c4c',width:2},hovertemplate:'%{y:$,.0f}<extra>Value</extra>'});
+    traces.push({x:days,y:I,type:'scatter',mode:'lines',name:'Money in',line:{color:'#4e5b56',width:1.5,shape:'hv'},hovertemplate:'%{y:$,.0f}<extra>Money in</extra>'});
+  }
+  if(showBench) traces.push({x:days,y:B,type:'scatter',mode:'lines',name:'Same buys in '+Hd.bench,line:{color:'#8a5a10',width:1.5,dash:'dash'},hovertemplate:'%{y:$,.0f}<extra>'+Hd.bench+'</extra>'});
+  if(showBuys&&!stack){ const bx=[],by=[],bt=[]; for(const l of Hd.buys){ const i=days.indexOf(l.d); if(i>=0){bx.push(l.d);by.push(V[i]);bt.push(l.t+' '+money(l.cost));} }
+    traces.push({x:bx,y:by,text:bt,type:'scatter',mode:'markers',name:'Buy',marker:{color:'#0f5c4c',size:mob?7:8,line:{color:'#fff',width:1.5}},hovertemplate:'%{text}<extra>Buy</extra>'}); }
+  const layout=Object.assign({},base,{xaxis:Object.assign({},base.xaxis,{type:'date',rangeslider:{visible:!mob&&N>60,thickness:0.07}})});
+  Plotly.react('perfChart',traces,layout,cfg);
+  // stats
+  const v0=V[0],vN=V[N],i0v=I[0],iN=I[N]; const gainRange=(vN-iN)-(v0-i0v);
+  const flows=[]; for(const l of Hd.buys) if(l.d>=days[0]) flows.push({d:l.d,a:-l.cost}); for(const x of S.sold) if((!only||x.t===only)&&x.d>=days[0]) flows.push({d:x.d,a:x.q*x.p});
   if(hRange!=='ALL'&&v0>0) flows.unshift({d:days[0],a:-v0}); flows.sort((a,b)=>a.d<b.d?-1:1); flows.push({d:td,a:vN});
-  const r=xirr(flows);
-  let best={v:-Infinity},worst={v:Infinity},peak=V[0],mdd=0; const dchg=[];
-  for(let i=1;i<=N;i++){ const c=(V[i]-V[i-1])-(I[i]-I[i-1]); dchg.push({d:days[i],v:c}); if(c>best.v)best={v:c,d:days[i]}; if(c<worst.v)worst={v:c,d:days[i]};
-    peak=Math.max(peak,V[i]); if(peak>0) mdd=Math.max(mdd,(peak-V[i])/peak); }
+  const r=xirr(flows); let best={v:-Infinity},worst={v:Infinity},peak=V[0],mdd=0; const dchg=[];
+  for(let i=1;i<=N;i++){ const c=(V[i]-V[i-1])-(I[i]-I[i-1]); dchg.push({d:days[i],v:c}); if(c>best.v)best={v:c,d:days[i]}; if(c<worst.v)worst={v:c,d:days[i]}; peak=Math.max(peak,V[i]); if(peak>0) mdd=Math.max(mdd,(peak-V[i])/peak); }
   const benchGain=showBench&&B[N]!=null&&B[0]!=null?(B[N]-iN)-(B[0]-i0v):null;
   $('#hStats').innerHTML=`
     <div><div class="k">Gain${hRange==='ALL'?'':' in range'}</div><div class="v num ${cls(gainRange)}">${signed(gainRange,0)}</div><div class="s num">${iN?pct(gainRange/iN*100):''} of ${money(iN,0)} in</div></div>
@@ -1118,17 +1162,12 @@ function renderHist(){
     <div><div class="k">Best day</div><div class="v num up">${best.d?signed(best.v,0):'—'}</div><div class="s">${best.d?fdate(best.d):''}</div></div>
     <div><div class="k">Worst day</div><div class="v num down">${worst.d?signed(worst.v,0):'—'}</div><div class="s">${worst.d?fdate(worst.d):''}</div></div>
     <div><div class="k">Max drawdown</div><div class="v num down">${mdd?'−'+fmt(mdd*100,1)+'%':'—'}</div><div class="s">peak to trough</div></div>`;
-  note.textContent=(S.sold.length?'Shares later sold are assumed bought at your first purchase date. ':'')+'Value excludes cash; today uses live prices.';
-  // daily change bars
-  const W2=W,H2=mob?120:150,pl2=pl; const mx=Math.max(...dchg.map(x=>Math.abs(x.v)),1); const Y2=v=>pt+(H2-pt-pb)*(1-(v+mx)/(2*mx));
-  const bw=Math.max(1,(W2-pl2-pr)/Math.max(dchg.length,1)*0.7);
-  $('#dailyChart').innerHTML=dchg.length?`<svg viewBox="0 0 ${W2} ${H2}"><line x1="${pl2}" x2="${W2-pr}" y1="${Y2(0)}" y2="${Y2(0)}" stroke="var(--line-2)"/>
-    <text class="axis" x="${pl2-6}" y="${Y2(mx)+4}" text-anchor="end">${signed(mx,0)}</text><text class="axis" x="${pl2-6}" y="${Y2(-mx)+4}" text-anchor="end">${signed(-mx,0)}</text>
-    ${dchg.map((x,i)=>`<rect x="${(pl2+(W2-pl2-pr)*(i+0.5)/dchg.length-bw/2).toFixed(1)}" y="${Math.min(Y2(x.v),Y2(0)).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.abs(Y2(x.v)-Y2(0)).toFixed(1)}" fill="${x.v>=0?'var(--up)':'var(--down)'}"><title>${x.d} ${signed(x.v)}</title></rect>`).join('')}
-    ${xt.map(i=>i>0?`<text class="axis" x="${X(i)}" y="${H2-8}" text-anchor="${i===N?'end':'middle'}">${days[i]?fdate(days[i]):''}</text>`:'').join('')}</svg>`:'<p class="note">Not enough days in range.</p>';
+  note.textContent=(S.sold.length?'Shares later sold are assumed bought at your first purchase date. ':'')+(only?'':'Value excludes cash; ')+'today uses live prices.';
+  Plotly.react('dailyChart',[{x:dchg.map(x=>x.d),y:dchg.map(x=>x.v),type:'bar',marker:{color:dchg.map(x=>x.v>=0?'#177a46':'#b83c33')},hovertemplate:'%{y:$,.0f}<extra></extra>'}],
+    Object.assign({},base,{showlegend:false,hovermode:'x',margin:{l:mob?48:60,r:12,t:4,b:30},xaxis:{type:'date',gridcolor:'#e6ebe9',rangebreaks:[{bounds:['sat','mon']}]},yaxis:Object.assign({},base.yaxis,{tickformat:'+,.0f'})}),cfg);
 }
 document.querySelectorAll('#hRange button').forEach(b=>b.addEventListener('click',()=>{hRange=b.dataset.r;document.querySelectorAll('#hRange button').forEach(x=>x.classList.toggle('on',x===b));renderHist();}));
-['hBench','hStack','hBuys'].forEach(id=>$('#'+id).addEventListener('change',renderHist));
+['hBench','hStack','hBuys','hSym'].forEach(id=>$('#'+id).addEventListener('change',renderHist));
 $('#hBenchSym').addEventListener('change',()=>{fetchHistory(false);renderHist();});
 
 /* ===================================================================
@@ -1358,7 +1397,7 @@ function showTab(id){ document.querySelectorAll('nav button').forEach(b=>b.class
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
 try{M=JSON.parse(sessionStorage.getItem('ledger.metrics')||'{}');}catch(e){}
 render(); schedule(); (async()=>{ if(S.cfg.gistToken&&S.cfg.gistId) await syncPull(false); else pullDone=true; refreshQuotes(); })();
-let rsz=null; window.addEventListener('resize',()=>{clearTimeout(rsz);rsz=setTimeout(()=>{renderProj();renderHist();},200);});
+let rsz=null; window.addEventListener('resize',()=>{clearTimeout(rsz);rsz=setTimeout(()=>{renderProj();},200);});
 let lastK=marketStatus().k;
 setInterval(()=>{ const st=marketStatus(); if(st.k!==lastK){ lastK=st.k; refreshQuotes(); } $('#mDot').className='dot '+st.k; $('#mText').textContent=st.txt; },60000);
 </script>
