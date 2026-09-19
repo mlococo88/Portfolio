@@ -550,7 +550,10 @@ async function fetchQuotesAlpaca(syms){
     const cc=PCC[s]&&PCC[s].d===d?PCC[s]:null;
     let q=a;
     if(b&&(!a||b.t>a.t)){ q=b; q.src='delayed'; }
-    if(q&&cc){ q.pc=cc.pc; if(cc.rc!=null) q.rc=cc.rc; if(cc.ppc!=null) q.ppc=cc.ppc; q.d=q.c-q.pc; q.dp=q.pc?q.d/q.pc*100:0; } // official closes as the reference
+    if(q&&cc){ q.pc=cc.pc; if(cc.ppc!=null) q.ppc=cc.ppc;
+      const m=etParts(new Date()).m, sipFinal=m>=976||m<240;          // delayed feed's daily bar is final from 4:16 PM
+      if(sipFinal&&cc.rc!=null) q.rc=cc.rc; else if(a&&a.rc!=null) q.rc=a.rc; else if(cc.rc!=null) q.rc=cc.rc;
+      q.d=q.c-q.pc; q.dp=q.pc?q.d/q.pc*100:0; }
     if(q) Q[s]=q;
   }
   try{sessionStorage.setItem('ledger.pcc',JSON.stringify(PCC));}catch(e){}
@@ -617,9 +620,9 @@ document.addEventListener('visibilitychange',async()=>{ if(document.visibilitySt
 =================================================================== */
 let C={}; try{C=JSON.parse(localStorage.getItem('ledger.close')||'{}');}catch(e){}
 function captureCloses(){
-  // While the regular session is open, keep the latest price as today's provisional close.
+  // While the regular session is open, keep the latest price (and when it was seen) as a provisional close.
   if(marketStatus().k!=='open')return;
-  const d=today(); for(const s in Q) C[s]={d,p:Q[s].c};
+  const d=today(), m=etParts(new Date()).m; for(const s in Q) C[s]={d,p:Q[s].c,m};
   localStorage.setItem('ledger.close',JSON.stringify(C));
 }
 function extInfo(){
@@ -634,8 +637,8 @@ function extInfo(){
     let ref;
     if(!traded) ref=q.c;
     else if(pre) ref=q.pc;
-    else if(C[h.t]&&C[h.t].d===d) ref=C[h.t].p;
-    else if(q.rc!=null) ref=q.rc;
+    else if(q.rc!=null) ref=q.rc;                                   // the feed's daily-bar close
+    else if(C[h.t]&&C[h.t].d===d&&C[h.t].m>=955) ref=C[h.t].p;      // or a price seen in the last 5 min of the session
     else {ref=q.pc; haveAll=false;}
     if(traded) anyExt=true;
     const chg=(q.c-ref)*sh; extChg+=chg; base+=ref*sh;
