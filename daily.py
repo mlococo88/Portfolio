@@ -45,8 +45,8 @@ today = now.strftime("%Y-%m-%d")
 force = os.environ.get("FORCE") == "1"
 if not force and (now.weekday() >= 5 or today in HOLIDAYS):
     print("market was closed today; no report"); sys.exit(0)
-if not force and now.hour != 20:
-    print(f"{now:%H:%M} ET — not the 8 PM reporting window"); sys.exit(0)
+if not force and now.hour < 20:
+    print(f"{now:%H:%M} ET — before the 8 PM reporting window"); sys.exit(0)
 
 # ---------------------------------------------------------------- gist
 tok = env("GIST_TOKEN"); gid = env("GIST_ID")
@@ -54,6 +54,8 @@ gh_headers = {"Authorization": "Bearer " + tok, "Accept": "application/vnd.githu
 gist = json.loads(http(f"{GH}/gists/{gid}", gh_headers))
 f = gist["files"].get("ledger.json") or sys.exit("Gist has no ledger.json")
 S = json.loads(f["content"] if not f.get("truncated") else http(f["raw_url"], gh_headers).decode())
+if not force and S.get("lastReport") == today:
+    print("report already sent today"); sys.exit(0)
 holdings = S.get("holdings", []); cash = float(S.get("cash", 0)); log = sorted(S.get("log", []), key=lambda p: p["d"])
 if not holdings:
     print("no holdings"); sys.exit(0)
@@ -189,3 +191,10 @@ topic = env("NTFY_TOPIC"); server = os.environ.get("NTFY_SERVER", "https://ntfy.
 title = f"Ledger · {facts['account_total']} ({facts['day_pct']})"
 http(f"{server}/{topic}", {"Title": title, "Priority": "default", "Tags": "moneybag", "Markdown": "no"}, text.encode("utf-8"), "POST")
 print("sent")
+if not force:  # remember so a second (late) scheduled run doesn't repeat it
+    S["lastReport"] = today
+    body = json.dumps({"files": {"ledger.json": {"content": json.dumps(S, indent=1)}}}).encode()
+    try:
+        http(f"{GH}/gists/{gid}", {**gh_headers, "Content-Type": "application/json"}, body, "PATCH")
+    except Exception as e:
+        print("could not record lastReport:", e)
