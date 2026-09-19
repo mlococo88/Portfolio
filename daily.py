@@ -41,12 +41,21 @@ def pct(n): return ("+" if n >= 0 else "-") + "{:.2f}%".format(abs(n))
 
 
 now = datetime.now(ET)
-today = now.strftime("%Y-%m-%d")
 force = os.environ.get("FORCE") == "1"
-if not force and (now.weekday() >= 5 or today in HOLIDAYS):
-    print("market was closed today; no report"); sys.exit(0)
-if not force and now.hour < 20:
+# GitHub often runs the schedule late, sometimes past midnight. Report on the most
+# recent trading day whose evening has passed: today if it is 8 PM or later, else
+# yesterday if it is before 4 AM (an overnight late run), else nothing.
+if now.hour >= 20:
+    rday = now
+elif now.hour < 4:
+    rday = now - timedelta(days=1)
+elif force:
+    rday = now
+else:
     print(f"{now:%H:%M} ET — before the 8 PM reporting window"); sys.exit(0)
+today = rday.strftime("%Y-%m-%d")
+if not force and (rday.weekday() >= 5 or today in HOLIDAYS):
+    print(f"market was closed on {today}; no report"); sys.exit(0)
 
 # ---------------------------------------------------------------- gist
 tok = env("GIST_TOKEN"); gid = env("GIST_ID")
@@ -114,15 +123,14 @@ def value_on_or_before(d):
     return pts[-1]["v"] if pts else None
 
 
-wk_start = (now - timedelta(days=now.weekday() + 1)).strftime("%Y-%m-%d")   # last Sunday
-mo_start = now.replace(day=1).strftime("%Y-%m-%d")
-v_wk = value_on_or_before(wk_start); v_mo = value_on_or_before((now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m-%d"))
+wk_start = (rday - timedelta(days=rday.weekday() + 1)).strftime("%Y-%m-%d")   # last Sunday
+v_wk = value_on_or_before(wk_start); v_mo = value_on_or_before((rday.replace(day=1) - timedelta(days=1)).strftime("%Y-%m-%d"))
 
-fired_today = [a for a in S.get("alerts", []) if (a.get("firedD") == today) or (a.get("last", "").startswith(now.strftime("%b %-d,")))]
+fired_today = [a for a in S.get("alerts", []) if (a.get("firedD") == today) or (a.get("last", "").startswith(rday.strftime("%b %-d,")))]
 sold_today = [x for x in S.get("sold", []) if x.get("d") == today]
 
 facts = {
-    "date": now.strftime("%A, %B %-d"),
+    "date": rday.strftime("%A, %B %-d"),
     "account_total": money(total), "day_change": signed(day), "day_pct": pct(day / prev_total * 100 if prev_total else 0),
     "total_gain": signed(inv - cost), "total_gain_pct": pct((inv - cost) / cost * 100 if cost else 0), "cash": money(cash),
     "week_to_date": signed(total - v_wk) if v_wk else None, "month_to_date": signed(total - v_mo) if v_mo else None,
