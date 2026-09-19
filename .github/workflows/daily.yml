@@ -2,10 +2,10 @@ name: Ledger nightly report
 
 on:
   schedule:
-    # 8:05 PM Eastern. Both UTC times are listed so it works in EDT and EST;
-    # the script only sends during the 7–9 PM ET window, so one of them is a no-op.
-    - cron: "5 0 * * 2-6"    # 00:05 UTC = 8:05 PM EDT (previous evening, Mon–Fri)
-    - cron: "5 1 * * 2-6"    # 01:05 UTC = 8:05 PM EST
+    # Around 8 PM Eastern. GitHub often runs these late, so two slots are listed
+    # and the script sends once per day, any time after 8 PM ET.
+    - cron: "5 0 * * 2-6"    # 00:05 UTC = 8:05 PM EDT / 7:05 PM EST (skipped in EST)
+    - cron: "5 1 * * 2-6"    # 01:05 UTC = 9:05 PM EDT (backup) / 8:05 PM EST
   workflow_dispatch:
 
 permissions:
