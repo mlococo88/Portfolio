@@ -45,8 +45,8 @@ today = now.strftime("%Y-%m-%d")
 force = os.environ.get("FORCE") == "1"
 if not force and (now.weekday() >= 5 or today in HOLIDAYS):
     print("market was closed today; no report"); sys.exit(0)
-if not force and not (19 <= now.hour <= 21):
-    print(f"{now:%H:%M} ET — not the reporting window"); sys.exit(0)
+if not force and now.hour != 20:
+    print(f"{now:%H:%M} ET — not the 8 PM reporting window"); sys.exit(0)
 
 # ---------------------------------------------------------------- gist
 tok = env("GIST_TOKEN"); gid = env("GIST_ID")
