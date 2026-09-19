@@ -529,12 +529,12 @@ function parseSnap(x,d){
   const lq=x.latestQuote;
   if(lq&&lq.bp>0&&lq.ap>0){ const qt=Math.floor(Date.parse(lq.t)/1000); if(qt>t+60&&(lq.ap-lq.bp)/lq.ap<0.01){ c=Math.round((lq.bp+lq.ap)*50)/100; t=qt; src='quote'; } }
   const db=x.dailyBar, pdb=x.prevDailyBar;
-  let pc=null, rc=null, ppc=null;
-  if(db&&etParts(new Date(db.t)).d===d){ pc=pdb?pdb.c:null; rc=db.c; }
+  let pc=null, rc=null, ppc=null, bd=db?etParts(new Date(db.t)).d:null;
+  if(db&&bd===d){ pc=pdb?pdb.c:null; rc=db.c; }
   else if(db){ pc=db.c; ppc=pdb?pdb.c:null; }
   else if(pdb){ pc=pdb.c; }
   if(pc==null) pc=c;
-  return {c,pc,ppc,d:c-pc,dp:pc?(c-pc)/pc*100:0,t,rc,src};
+  return {c,pc,ppc,d:c-pc,dp:pc?(c-pc)/pc*100:0,t,rc,src,bd};
 }
 async function fetchQuotesAlpaca(syms){
   const d=today(), st=marketStatus();
@@ -611,7 +611,7 @@ async function lookupPrice(sym){
 function schedule(){
   clearInterval(timer);
   const ms=Math.max(5,+S.cfg.refresh||30)*1000;
-  timer=setInterval(()=>{ if(document.visibilityState==='visible'){ const st=marketStatus(); if(st.k!=='closed'||!Q[(S.holdings[0]||{}).t]) refreshQuotes(); } },ms);
+  timer=setInterval(()=>{ if(document.visibilityState==='visible'){ const st=marketStatus(); if(st.k!=='closed'||!Q[(S.holdings[0]||{}).t]) refreshQuotes(); else render(); } },ms);
 }
 document.addEventListener('visibilitychange',async()=>{ if(document.visibilityState!=='visible')return; if(S.cfg.gistToken&&S.cfg.gistId&&Date.now()-lastPull>60000) await syncPull(false); refreshQuotes(); });
 
@@ -626,29 +626,35 @@ function captureCloses(){
   localStorage.setItem('ledger.close',JSON.stringify(C));
 }
 function extInfo(){
-  const st=marketStatus(); if(st.k!=='ext')return null;
-  const pre=st.txt==='Pre-market', d=today();
-  let extChg=0,regChg=0,base=0,haveAll=true,anyExt=false,haveReg=true,rows=[];
+  const st=marketStatus(); if(st.k==='open')return null;
+  const closed=st.k==='closed', pre=!closed&&st.txt==='Pre-market', d=today();
+  let extChg=0,regChg=0,base=0,haveAll=true,anyExt=false,haveReg=true,rows=[],sessionDate=null;
   for(const h of S.holdings){
     const q=Q[h.t]; if(!q){haveAll=false;haveReg=false;continue;}
     const sh=shares(h);
     const qt=q.t?etParts(new Date(q.t*1000)):null;
-    const traded=qt&&qt.d===d&&(pre?qt.m<570:qt.m>960);
-    let ref;
-    if(!traded) ref=q.c;
-    else if(pre) ref=q.pc;
-    else if(q.rc!=null) ref=q.rc;                                   // the feed's daily-bar close
-    else if(C[h.t]&&C[h.t].d===d&&C[h.t].m>=955) ref=C[h.t].p;      // or a price seen in the last 5 min of the session
-    else {ref=q.pc; haveAll=false;}
+    // which session's close are we measuring from?
+    const barToday=q.rc!=null;                      // today's regular session has a bar
+    const sday=closed?(q.bd||d):d;                  // date of the session the close belongs to
+    if(!sessionDate)sessionDate=sday;
+    let ref, prev, traded;
+    if(pre){ ref=q.pc; prev=q.ppc; traded=qt&&qt.d===d&&qt.m<570; }
+    else{
+      if(barToday){ ref=q.rc; prev=q.pc; }
+      else if(closed){ ref=q.pc; prev=q.ppc; }
+      else if(C[h.t]&&C[h.t].d===d&&C[h.t].m>=955){ ref=C[h.t].p; prev=q.pc; }
+      else { ref=q.pc; prev=q.ppc; haveAll=false; }
+      traded=qt&&qt.d===sday&&qt.m>960;
+    }
+    if(ref==null) ref=q.c;
+    const cur=traded?q.c:ref;                       // no extended-hours trade: show the official close itself
     if(traded) anyExt=true;
-    const chg=(q.c-ref)*sh; extChg+=chg; base+=ref*sh;
-    // last regular session's change: today's close vs yesterday's (after hours), or yesterday's vs the day before (pre-market)
-    const prev=pre?q.ppc:q.pc;
+    const chg=(cur-ref)*sh; extChg+=chg; base+=ref*sh;
     if(prev!=null) regChg+=(ref-prev)*sh; else haveReg=false;
-    rows.push({t:h.t,c:q.c,close:ref,chg:q.c-ref,pct:ref?(q.c-ref)/ref*100:0,traded,when:q.t?fmtWhen(q.t):'',src:q.src});
+    rows.push({t:h.t,c:cur,close:ref,chg:cur-ref,pct:ref?(cur-ref)/ref*100:0,traded,when:q.t?fmtWhen(q.t):'',src:q.src});
   }
   const T=totals();
-  return {pre,extChg,extPct:base+S.cash?extChg/(base+S.cash)*100:0,regClose:base+S.cash,regChg,regPct:base+S.cash-regChg?regChg/(base+S.cash-regChg)*100:0,haveReg,
+  return {pre,closed,sessionDate,extChg,extPct:base+S.cash?extChg/(base+S.cash)*100:0,regClose:base+S.cash,regChg,regPct:base+S.cash-regChg?regChg/(base+S.cash-regChg)*100:0,haveReg,
           closeGain:base-T.cost,cost:T.cost,total:T.total,gain:T.gain,haveAll,anyExt,rows};
 }
 function fmtWhen(unix){ const dt=new Date(unix*1000), sameDay=etParts(dt).d===today();
@@ -658,7 +664,10 @@ function renderExt(){
   if(!x||!x.rows.length){el.className='panels';el.innerHTML='';$('.hero').classList.remove('off');return;}
   $('.hero').classList.add('off'); el.className='panels on';
   const lbl=x.pre?'Pre-market':'After hours';
-  const closeLbl=x.pre?'Yesterday\'s close':'Today\'s close';
+  const sameDay=x.sessionDate===today();
+  const dayName=x.sessionDate?new Date(x.sessionDate+'T12:00:00').toLocaleDateString([],{weekday:'long'}):'';
+  const closeLbl=x.pre?'Yesterday\'s close':sameDay?'Today\'s close':(dayName?dayName+'\'s close':'Last close');
+  const liveLbl=x.closed?'final':'live · until '+(x.pre?'9:30 AM':'8:00 PM')+' ET';
   el.innerHTML=`
     <div class="panel">
       <div class="ph"><b>${closeLbl}</b><span>regular session${x.pre?'':' · 4:00 PM ET'}</span></div>
@@ -671,7 +680,7 @@ function renderExt(){
       <div class="syms">${x.rows.map(r=>`<span><b>${esc(r.t)}</b> <span class="num">${money(r.close)}</span></span>`).join('')}</div>
     </div>
     <div class="panel live">
-      <div class="ph"><b>${lbl}</b><span>live · until ${x.pre?'9:30 AM':'8:00 PM'} ET</span></div>
+      <div class="ph"><b>${lbl}</b><span>${x.closed?(dayName?dayName+' · ':'')+'final':liveLbl}</span></div>
       <div class="big num">${money(x.total)}</div>
       <div class="stats">
         <div><span>${lbl} move</span><b class="num ${cls(x.extChg)}">${signed(x.extChg)} (${pct(x.extPct)})</b></div>
@@ -679,7 +688,7 @@ function renderExt(){
         <div><span>Since prior close</span><b class="num ${cls(x.extChg+x.regChg)}">${x.pre?signed(x.extChg)+' ('+pct(x.extPct)+')':x.haveReg?signed(x.extChg+x.regChg):'—'}</b></div>
       </div>
       <div class="syms">${x.rows.map(r=>`<span title="${r.src==='quote'?'IEX bid/ask midpoint':r.src==='delayed'?'consolidated price, 15-minute delayed':'IEX last trade'} at ${esc(r.when)}"><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span> <span class="muted">${esc(r.when)}${r.src==='quote'?' mid':r.src==='delayed'?' ·15m':''}</span></span>`).join('')}</div>
-      ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported yet — showing the last close.</p>'}
+      ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported'+(x.closed?'':' yet')+' — showing the last close.</p>'}
       ${x.haveAll?'':'<p class="note">Today\'s 4 pm close isn\'t available, so the after-hours move is measured from yesterday\'s close.</p>'}
     </div>`;
 }
