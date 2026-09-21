@@ -260,6 +260,23 @@ body.home-tab.mobile .panel .stats span{font-size:11px}
 .preview{font-size:13px;color:var(--ink-2);margin-bottom:12px;padding:8px 10px;background:var(--bg);border-radius:var(--r)}
 @media (max-width:760px){.modal{align-items:flex-end;padding:0}.modal .box{border-radius:var(--r-lg) var(--r-lg) 0 0;max-width:none;padding-bottom:calc(20px + env(safe-area-inset-bottom))}}
 
+.sheet{position:fixed;inset:0;background:var(--bg);z-index:30;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.sheet .bar{position:sticky;top:0;background:var(--paper);border-bottom:1px solid var(--line);padding:calc(10px + env(safe-area-inset-top,0px)) 16px 10px;display:flex;align-items:center;gap:12px;z-index:2}
+.sheet .bar .back{border:0;background:none;font-size:22px;line-height:1;padding:4px 8px 4px 0;color:var(--ink-2)}
+.sheet .bar .t{flex:1;min-width:0}
+.sheet .bar .t b{font-size:18px}
+.sheet .bar .t small{display:block;color:var(--ink-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sheet .bar .px{text-align:right}
+.sheet .bar .px b{display:block;font-size:20px;font-weight:600}
+.sheet .bar .px span{font-size:13px}
+.sheet .body{max-width:900px;margin:0 auto;padding:14px 16px 60px}
+.kv6{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+.kv6>div{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:var(--paper)}
+.kv6 .k{font-size:11px;color:var(--ink-2)}.kv6 .v{font-weight:600;font-size:15px}.kv6 .s{font-size:11px;color:var(--ink-3)}
+.sheet .card{margin-bottom:12px}
+.lt{font-size:11px;padding:1px 6px;border-radius:99px;background:var(--bg);border:1px solid var(--line);color:var(--ink-2)}
+.lt.long{background:var(--up-soft);color:var(--up);border-color:transparent}
+@media (max-width:760px){.sheet .body{padding:10px 12px 60px}.kv6{grid-template-columns:1fr 1fr 1fr}.kv6 .v{font-size:14px}}
 .empty{padding:30px 10px;text-align:center;color:var(--ink-2)}
 .empty b{display:block;font-family:var(--serif);font-size:20px;font-weight:500;color:var(--ink);margin-bottom:4px}
 .kbd{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
@@ -483,6 +500,7 @@ body.home-tab.mobile .panel .stats span{font-size:11px}
 
 </main>
 
+<div id="detailHost"></div>
 <div id="modalHost"></div>
 <div id="bannerHost"></div>
 
@@ -777,7 +795,7 @@ function render(){
   $('#setupText').textContent=missing.length?missing.map((m,i)=>(i?' and ':'')+m).join('').replace(/^./,c=>c.toUpperCase())+'.':'';
   $('#setupNotice').querySelector('h3').textContent=missing.length===2?'Two things to finish setup':'One thing to finish setup';
 
-  renderHome(T); renderTable(T); renderCards(T); renderAlloc(T); renderAlerts(); renderSold(); renderProj(); renderHist(); renderSettings();
+  renderHome(T); if(detailSym&&!document.activeElement?.closest('#sheet')) renderDetail(); renderTable(T); renderCards(T); renderAlloc(T); renderAlerts(); renderSold(); renderProj(); renderHist(); renderSettings();
 }
 
 function renderHome(T){
@@ -787,7 +805,7 @@ function renderHome(T){
   for(const {h,q,v} of rows){
     const sh=shares(h), gain=v-basis(h);
     const extRow=ext&&ext.rows.find(r=>r.t===h.t), extTag=extRow&&extRow.traded?`<span class="sub ${cls(extRow.chg)}">${st.k==='closed'?'AH':(ext.pre?'pre':'AH')} ${pct(extRow.pct)}</span>`:'';
-    html+=`<button class="hrow" onclick="showTab('holdings');openLots['${h.t}']=true;render();">
+    html+=`<button class="hrow" onclick="openDetail('${h.t}')">
       <span class="sym">${esc(h.t)}<small>${esc(h.name||'')}</small></span>
       <span><b class="num">${q?money(q.c):'—'}</b>${extTag}</span>
       <span class="${q?cls(q.dp):''}"><b class="num">${q?pct(q.dp):'—'}</b><span class="sub num ${q?cls(q.d):''}">${q?signed(q.d*sh,0):''}</span></span>
@@ -819,7 +837,7 @@ function renderTable(T){
   for(const h of hs){
     const q=Q[h.t], sh=shares(h), b=basis(h), v=value(h), gain=v-b, dayg=q?q.d*sh:null;
     html+=`<tr>
-      <td><div class="sym">${esc(h.t)}</div><div class="nm" title="${esc(h.name||'')}">${esc(h.name||'')}</div></td>
+      <td style="cursor:pointer" onclick="openDetail('${h.t}')"><div class="sym">${esc(h.t)} <span class="muted" style="font-weight:400;font-size:12px">›</span></div><div class="nm" title="${esc(h.name||'')}">${esc(h.name||'')}</div></td>
       <td class="num">${q?money(q.c)+'<div class="sub '+cls(q.d)+'">'+signed(q.d)+'</div>':'<span class="muted">—</span>'}</td>
       <td class="num ${cls(dayg)}">${q?signed(dayg)+'<div class="sub">'+pct(q.dp)+'</div>':'—'}</td>
       <td class="num ${cls(gain)}">${q?signed(gain)+'<div class="sub">'+pct(b?gain/b*100:0)+'</div>':'—'}</td>
@@ -851,7 +869,7 @@ function renderCards(T){
   for(const h of hs){
     const q=Q[h.t], sh=shares(h), b=basis(h), v=value(h), gain=v-b, dayg=q?q.d*sh:null;
     html+=`<div class="hcard">
-      <div class="top"><div><div class="sym">${esc(h.t)}</div><div class="nm">${esc(h.name||'')}</div></div><div style="text-align:right"><div class="big num">${money(v)}</div><div class="num ${cls(dayg)}" style="font-size:13px">${q?signed(dayg)+' today ('+pct(q.dp)+')':'no quote'}</div></div></div>
+      <div class="top"><div onclick="openDetail('${h.t}')" style="cursor:pointer"><div class="sym">${esc(h.t)} <span class="muted" style="font-weight:400;font-size:13px">›</span></div><div class="nm">${esc(h.name||'')}</div></div><div style="text-align:right"><div class="big num">${money(v)}</div><div class="num ${cls(dayg)}" style="font-size:13px">${q?signed(dayg)+' today ('+pct(q.dp)+')':'no quote'}</div></div></div>
       <div class="kv">
         <span>Last</span><b class="num">${q?money(q.c)+' ('+signed(q.d)+')':'—'}</b>
         <span>Total gain</span><b class="num ${cls(gain)}">${q?signed(gain)+' ('+pct(b?gain/b*100:0)+')':'—'}</b>
@@ -895,7 +913,7 @@ function renderSettings(){
 =================================================================== */
 function modal(html){ $('#modalHost').innerHTML=`<div class="modal" onclick="if(event.target===this)closeModal()"><div class="box">${html}</div></div>`; const f=$('#modalHost input'); if(f) setTimeout(()=>{if(document.body.contains(f)) f.focus();},50); }
 function closeModal(){$('#modalHost').innerHTML='';}
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){ if($('#modalHost').innerHTML) closeModal(); else if(detailSym) history.back(); }});
 
 function openTrade(t,side){
   const h=t?S.holdings.find(x=>x.t===t):null;
@@ -981,6 +999,85 @@ function openCash(){
 }
 function commitCash(){
   const adj=$('#cAdj').value; S.cash=adj!==''?S.cash+(+adj||0):(+$('#cBal').value||0); S.cash=Math.round(S.cash*100)/100; closeModal(); save();
+}
+
+/* ===================================================================
+   HOLDING DETAIL SHEET
+=================================================================== */
+let detailSym=null, detailRange='1Y';
+function openDetail(t){ detailSym=t; history.pushState({detail:t},''); renderDetail(); fetchHistory(false).then(()=>renderDetail()); }
+function closeDetail(){ detailSym=null; $('#detailHost').innerHTML=''; }
+window.addEventListener('popstate',()=>{ if(detailSym) closeDetail(); });
+async function renderDetail(){
+  const t=detailSym; if(!t) return; const h=S.holdings.find(x=>x.t===t); if(!h){closeDetail();return;}
+  const q=Q[t], T=totals(), sh=shares(h), b=basis(h), v=value(h), gain=v-b, avg=b/sh, m=M[t]||{}, hs=H[t]||{};
+  const ext=extInfo(), er=ext&&ext.rows.find(r=>r.t===t), st=marketStatus();
+  const lots=h.lots.slice().sort((a,b2)=>a.d<b2.d?-1:1);
+  const oneYear=d=>{const x=new Date(d+'T12:00:00');x.setFullYear(x.getFullYear()+1);return x.toISOString().slice(0,10);};
+  const contribs=S.plan.contribs.filter(c=>c.t===t), alerts=S.alerts.filter(a=>a.s===t), sold=S.sold.filter(x=>x.t===t);
+  const rangePos=m.hi&&m.lo&&q?(q.c-m.lo)/(m.hi-m.lo)*100:null;
+  const first=$('#detailHost').innerHTML==='';
+  $('#detailHost').innerHTML=`<div class="sheet" id="sheet">
+    <div class="bar"><button class="back" onclick="history.back()" aria-label="Back">‹</button>
+      <div class="t"><b>${esc(t)}</b><small>${esc(h.name||'')}</small></div>
+      <div class="px"><b class="num">${q?money(q.c):'—'}</b><span class="num ${q?cls(q.d):''}">${q?signed(q.d)+' ('+pct(q.dp)+')':''}</span>${er&&er.traded?`<span class="num ${cls(er.chg)}" style="display:block;font-size:12px">${ext.pre?'pre-market':'after hours'} ${money(er.c)} · ${pct(er.pct)}</span>`:''}</div></div>
+    <div class="body">
+      <div class="row" style="margin-bottom:12px"><button class="btn primary" onclick="openTrade('${t}','buy')">Buy more</button><button class="btn" onclick="openTrade('${t}','sell')">Sell</button><button class="btn" onclick="closeDetail();showTab('alerts');$('#aSym').value='${t}'">Add alert</button></div>
+      <div class="kv6">
+        <div><div class="k">Value</div><div class="v num">${money(v)}</div><div class="s num">${fmt(T.total?v/T.total*100:0,1)}% of account</div></div>
+        <div><div class="k">Total gain</div><div class="v num ${cls(gain)}">${signed(gain)}</div><div class="s num ${cls(gain)}">${pct(b?gain/b*100:0)}</div></div>
+        <div><div class="k">Today</div><div class="v num ${q?cls(q.d):''}">${q?signed(q.d*sh):'—'}</div><div class="s num">${q?pct(q.dp):''}</div></div>
+        <div><div class="k">Shares</div><div class="v num">${fmt(sh,3)}</div><div class="s">${lots.length} lot${lots.length>1?'s':''}</div></div>
+        <div><div class="k">Avg cost</div><div class="v num">${money(avg)}</div><div class="s num">${q?(q.c>=avg?'price is '+pct((q.c-avg)/avg*100)+' above':'price is '+pct((q.c-avg)/avg*100)+' below'):''}</div></div>
+        <div><div class="k">Cost basis</div><div class="v num">${money(b)}</div><div class="s">${lots[0]?'since '+lots[0].d:''}</div></div>
+      </div>
+      <div class="card" style="margin-top:12px">
+        <div class="row spread" style="margin-bottom:6px"><h3 style="margin:0">Price</h3><div class="seg" id="dRange">${['1M','3M','6M','1Y','5Y'].map(r=>`<button data-r="${r}" class="${r===detailRange?'on':''}">${r}</button>`).join('')}</div></div>
+        <div id="dChart" style="width:100%;height:${isMobile()?260:340}px"></div>
+        <p class="note" id="dChartNote" style="margin-top:6px"></p>
+      </div>
+      <div class="kv6">
+        <div><div class="k">52-week range</div><div class="v num">${m.lo&&m.hi?money(m.lo,0)+' – '+money(m.hi,0):'—'}</div><div class="s">${rangePos!=null?fmt(rangePos,0)+'% of the way up':''}</div></div>
+        <div><div class="k">Past return</div><div class="v num ${hs.cagr!=null?cls(hs.cagr):''}">${hs.cagr!=null?pct(hs.cagr,1)+'/yr':'—'}</div><div class="s">${hs.years?hs.years.toFixed(1)+' yrs, dividends incl.':''}</div></div>
+        <div><div class="k">Volatility</div><div class="v num">${hs.vol!=null?fmt(hs.vol,0)+'%':'—'}</div><div class="s">annualized</div></div>
+        <div><div class="k">Investing</div><div class="v num">${contribs.length?money(contribs.reduce((a,c)=>a+c.amt*FREQ[c.freq].pm,0),0)+'/mo':'—'}</div><div class="s">${contribs.map(c=>money(c.amt,0)+' '+FREQ[c.freq].l.toLowerCase()).join(', ')||'no recurring buys'}</div></div>
+        <div><div class="k">Alerts</div><div class="v">${alerts.length}</div><div class="s">${alerts.filter(a=>a.t.startsWith('step')||!a.fired).length} watching</div></div>
+        <div><div class="k">Realized</div><div class="v num ${cls(sold.reduce((a,x)=>a+x.gain,0))}">${sold.length?signed(sold.reduce((a,x)=>a+x.gain,0)):'—'}</div><div class="s">${sold.length?sold.length+' sale'+(sold.length>1?'s':''):'nothing sold'}</div></div>
+      </div>
+      <div class="card" style="margin-top:12px"><h3>Your purchases</h3>
+        <div class="tbl-wrap"><table><thead><tr><th>Bought</th><th>Shares</th><th>Paid</th><th class="hv">Cost</th><th class="hv">Now</th><th>Gain</th><th>Term</th><th></th></tr></thead><tbody>
+        ${lots.map(l=>{const idx=h.lots.indexOf(l), g=q?(q.c-l.p)*l.q:null, long=today()>=oneYear(l.d);
+          return `<tr><td style="text-align:left">${esc(l.d)}</td><td class="num">${fmt(l.q,3)}</td><td class="num">${money(l.p)}</td><td class="num hv">${money(l.q*l.p)}</td><td class="num hv">${q?money(q.c*l.q):'—'}</td><td class="num ${cls(g)}">${g==null?'—':signed(g)+'<div class="sub">'+pct(g/(l.q*l.p)*100)+'</div>'}</td><td><span class="lt ${long?'long':''}" title="${long?'Held over a year: long-term capital gains':'Long-term after '+oneYear(l.d)}">${long?'long':'short'}</span></td><td><span class="acts"><button class="btn sm" onclick="editLot('${t}',${idx})">Edit</button></span></td></tr>`;}).join('')}
+        </tbody></table></div>
+        <p class="note" style="margin-top:8px">Short-term lots become long-term one year after purchase.</p>
+      </div>
+      ${alerts.length?`<div class="card"><h3>Alerts on ${esc(t)}</h3><ul class="alist">${alerts.map(a=>{const L={above:'rises above',below:'falls below',daypct_up:'day change above +',daypct_dn:'day change below −',step_usd:'every move of',step_pct:'every move of'};return `<li><span>${L[a.t]} <b class="num">${a.t.includes('pct')?fmt(a.v)+'%':money(a.v)}</b> ${a.t.startsWith('step')?'<span class="chip">repeating</span>':(a.fired?'<span class="chip warn">fired</span>':'<span class="chip">watching</span>')}</span></li>`;}).join('')}</ul></div>`:''}
+      ${sold.length?`<div class="card"><h3>Sales</h3><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Shares</th><th>Price</th><th>Realized gain</th></tr></thead><tbody>${sold.map(x=>`<tr><td style="text-align:left">${esc(x.d)}</td><td class="num">${fmt(x.q,3)}</td><td class="num">${money(x.p)}</td><td class="num ${cls(x.gain)}">${signed(x.gain)}</td></tr>`).join('')}</tbody></table></div></div>`:''}
+    </div></div>`;
+  document.querySelectorAll('#dRange button').forEach(bt=>bt.addEventListener('click',()=>{detailRange=bt.dataset.r;renderDetail();}));
+  if(first) $('#sheet').scrollTop=0;
+  // chart
+  const bars=HB[t]; const note=$('#dChartNote');
+  if(!bars){ note.textContent=hasKey()?'Loading price history…':'Add Alpaca keys in Settings to load price history.'; return; }
+  try{ await loadPlotly(); }catch(e){ note.textContent=e.message; return; }
+  if(detailSym!==t) return;
+  const td=today(), dt=new Date(td+'T12:00:00'); const back=mo=>{const x=new Date(dt);x.setMonth(x.getMonth()-mo);return x.toISOString().slice(0,10);};
+  const from={'1M':back(1),'3M':back(3),'6M':back(6),'1Y':back(12),'5Y':'0000'}[detailRange];
+  let xs=[],ys=[]; bars.d.forEach((d,i)=>{ if(d>=from){xs.push(d);ys.push(bars.c[i]);} });
+  if(q&&xs[xs.length-1]!==td){xs.push(td);ys.push(q.c);}
+  const mob=isMobile();
+  const up=ys.length>1&&ys[ys.length-1]>=ys[0], col=up?'#177a46':'#b83c33';
+  const bx=[],by=[],bt2=[]; for(const l of lots) if(l.d>=from){bx.push(l.d);by.push(l.p);bt2.push(fmt(l.q,3)+' sh at '+money(l.p));}
+  const traces=[{x:xs,y:ys,type:'scatter',mode:'lines',name:t,line:{color:col,width:2},fill:'tozeroy',fillcolor:up?'rgba(23,122,70,.07)':'rgba(184,60,51,.07)',hovertemplate:'%{y:$,.2f}<extra></extra>'},
+    {x:[xs[0],xs[xs.length-1]],y:[avg,avg],type:'scatter',mode:'lines',name:'Avg cost '+money(avg),line:{color:'#4e5b56',width:1.2,dash:'dot'},hoverinfo:'skip'},
+    {x:bx,y:by,text:bt2,type:'scatter',mode:'markers',name:'Bought',marker:{color:'#0f5c4c',size:mob?8:9,symbol:'circle',line:{color:'#fff',width:1.5}},hovertemplate:'%{text}<extra>%{x}</extra>'}];
+  const lo=Math.min(...ys,avg), hi=Math.max(...ys,avg), pad=(hi-lo)*0.08||1;
+  Plotly.react('dChart',traces,{paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{family:'IBM Plex Sans, system-ui, sans-serif',size:mob?11:12,color:'#4e5b56'},
+    margin:{l:mob?46:56,r:10,t:6,b:mob?32:36},hovermode:'x unified',showlegend:true,legend:{orientation:'h',y:-0.2,x:0,traceorder:'normal',font:{size:mob?11:12}},
+    xaxis:{type:'date',gridcolor:'#e6ebe9',showspikes:true,spikemode:'across',spikethickness:1,spikecolor:'#8a9691',spikedash:'dot',rangebreaks:[{bounds:['sat','mon']}]},
+    yaxis:{gridcolor:'#e6ebe9',tickprefix:'$',tickformat:',.0f',range:[lo-pad,hi+pad],fixedrange:true}},{displayModeBar:false,responsive:true});
+  const chg=ys[ys.length-1]-ys[0];
+  note.innerHTML=`${detailRange==='5Y'?'Up to five years':'Last '+detailRange.replace('M',' month').replace('Y',' year')+(detailRange[0]!=='1'?'s':'')}: <b class="num ${cls(chg)}">${signed(chg)} (${pct(ys[0]?chg/ys[0]*100:0)})</b>. Dividend-adjusted daily closes; dots are your buys at the price paid.`;
 }
 
 /* ===================================================================
@@ -1295,7 +1392,7 @@ async function fetchHistory(force){
     localStorage.setItem('ledger.hist',JSON.stringify(H));
     try{localStorage.setItem('ledger.bars',JSON.stringify(HB));}catch(e){}
   }catch(e){ $('#histNote').textContent='Could not load history: '+e.message; }
-  renderProj(); renderHist();
+  renderProj(); renderHist(); if(detailSym) renderDetail();
 }
 function assumeFor(t){
   const a=S.plan.assume[t]||{}; const h=H[t]||{};
