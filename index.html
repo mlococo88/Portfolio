@@ -129,6 +129,28 @@ td .nm{font-size:12px;color:var(--ink-3);max-width:160px;overflow:hidden;text-ov
 .lots table{min-width:0;font-size:13px}
 tr.lotrow td{padding:4px 8px}
 .stale{color:var(--ink-3);font-size:12px}
+.card.home{padding:6px 16px 12px}
+.hlist{display:flex;flex-direction:column}
+.hrow{display:grid;grid-template-columns:minmax(64px,1.2fr) 1fr 1fr 1.2fr 56px;align-items:center;gap:8px;padding:11px 0;border-bottom:1px solid var(--line);text-align:right;background:none;border-left:0;border-right:0;border-top:0;width:100%;color:inherit;font:inherit;cursor:pointer}
+.hrow:last-child{border-bottom:0}
+.hrow .sym{text-align:left;font-weight:600;font-size:15px}
+.hrow .sym small{display:block;font-weight:400;font-size:11px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px}
+.hrow .sub{display:block;font-size:11px;color:var(--ink-3);font-weight:400}
+.hrow b{font-weight:500}
+.hrow .w{font-size:12px;color:var(--ink-2)}
+.hrow.cash{cursor:default}
+.hhead{display:grid;grid-template-columns:minmax(64px,1.2fr) 1fr 1fr 1.2fr 56px;gap:8px;font-size:11px;color:var(--ink-3);text-align:right;padding:8px 0 4px;border-bottom:1px solid var(--line)}
+.hhead span:first-child{text-align:left}
+.hfoot{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--ink-2);margin-top:6px}
+.hfoot b{font-weight:600;color:var(--ink)}
+body.home-tab.mobile .panel .syms,body.home-tab.mobile .panel .note{display:none}
+body.home-tab.mobile .panel{padding:10px 14px 12px}
+body.home-tab.mobile .panel .big{font-size:24px;margin-bottom:4px}
+body.home-tab.mobile .panels{gap:8px;padding:10px 0 8px}
+body.home-tab.mobile .panel .stats{grid-template-columns:1fr 1fr 1fr;gap:4px 8px}
+body.home-tab.mobile .panel .stats b{font-size:13px}
+body.home-tab.mobile .panel .stats span{font-size:11px}
+@media (max-width:760px){.hrow{grid-template-columns:minmax(58px,1.1fr) 1fr 1fr 1.2fr 44px;padding:9px 0;font-size:14px}.hhead{grid-template-columns:minmax(58px,1.1fr) 1fr 1fr 1.2fr 44px}.hrow .sym{font-size:14px}.card.home{padding:2px 12px 10px}}
 
 /* mobile cards */
 .cards{display:none}
@@ -158,7 +180,7 @@ tr.lotrow td{padding:4px 8px}
   .market{grid-column:1/-1;margin:0;padding:0;font-size:12px;align-self:center}
   /* tabs fit without scrolling */
   nav{justify-content:space-between}
-  nav button{padding:9px 4px;font-size:14px;flex:1;text-align:center}
+  nav button{padding:9px 2px;font-size:13px;flex:1;text-align:center}
   /* forms */
   .grid.g3,.grid.g2{grid-template-columns:1fr 1fr}
   #tab-settings .grid{grid-template-columns:1fr}
@@ -262,7 +284,8 @@ tr.lotrow td{padding:4px 8px}
     <div class="panels" id="panels"></div>
     <div class="ext" id="ext" style="display:none"></div>
     <nav id="nav">
-      <button data-tab="holdings" class="on">Holdings</button>
+      <button data-tab="home" class="on">Home</button>
+      <button data-tab="holdings">Holdings</button>
       <button data-tab="projection">Projection</button>
       <button data-tab="alerts">Alerts</button>
       <button data-tab="history">History</button>
@@ -273,8 +296,18 @@ tr.lotrow td{padding:4px 8px}
 
 <main class="wrap">
 
+<!-- ================= HOME ================= -->
+<section class="tab on" id="tab-home">
+  <div class="card home">
+    <div class="hlist" id="homeList"></div>
+    <div class="alloc" id="homeAlloc" style="margin:12px 0 6px"></div>
+    <div class="hfoot" id="homeFoot"></div>
+  </div>
+  <div class="card" id="homeSetup" style="display:none"><h3>Finish setup</h3><p class="note" id="homeSetupText"></p><button class="btn" onclick="showTab('settings')">Open settings</button></div>
+</section>
+
 <!-- ================= HOLDINGS ================= -->
-<section class="tab on" id="tab-holdings">
+<section class="tab" id="tab-holdings">
   <div class="card" id="setupNotice" style="display:none">
     <h3>Two things to finish setup</h3>
     <p class="note" id="setupText"></p>
@@ -488,6 +521,7 @@ function saveLocal(){ localStorage.setItem(LS_KEY,JSON.stringify(S)); render(); 
 const $=s=>document.querySelector(s);
 const fmt=(n,d=2)=>n==null||isNaN(n)?'—':n.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
 const isMobile=()=>window.innerWidth<760;
+const FREQ={weekly:{l:'Weekly',pm:52/12},biweekly:{l:'Every 2 weeks',pm:26/12},semimonthly:{l:'Twice a month',pm:2},monthly:{l:'Monthly',pm:1},quarterly:{l:'Quarterly',pm:1/3},annual:{l:'Yearly',pm:1/12}};
 const moneyK=n=>Math.abs(n)>=1e6?'$'+(n/1e6).toFixed(n>=1e7?0:1)+'M':Math.abs(n)>=1e3?'$'+(Math.abs(n)<1e5?(n/1e3).toFixed(1):Math.round(n/1e3))+'k':'$'+Math.round(n);
 const money=(n,d=2)=>n==null||isNaN(n)?'—':(n<0?'−':'')+'$'+fmt(Math.abs(n),d);
 const signed=(n,d=2)=>n==null||isNaN(n)?'—':(n>=0?'+':'−')+'$'+fmt(Math.abs(n),d);
@@ -743,9 +777,33 @@ function render(){
   $('#setupText').textContent=missing.length?missing.map((m,i)=>(i?' and ':'')+m).join('').replace(/^./,c=>c.toUpperCase())+'.':'';
   $('#setupNotice').querySelector('h3').textContent=missing.length===2?'Two things to finish setup':'One thing to finish setup';
 
-  renderTable(T); renderCards(T); renderAlloc(T); renderAlerts(); renderSold(); renderProj(); renderHist(); renderSettings();
+  renderHome(T); renderTable(T); renderCards(T); renderAlloc(T); renderAlerts(); renderSold(); renderProj(); renderHist(); renderSettings();
 }
 
+function renderHome(T){
+  const st=marketStatus(), ext=extInfo();
+  const rows=S.holdings.map(h=>({h,q:Q[h.t],v:value(h)})).sort((a,b)=>b.v-a.v);
+  let html=`<div class="hhead"><span>Holding</span><span>Last</span><span>Today</span><span>Value</span><span>Wt</span></div>`;
+  for(const {h,q,v} of rows){
+    const sh=shares(h), gain=v-basis(h);
+    const extRow=ext&&ext.rows.find(r=>r.t===h.t), extTag=extRow&&extRow.traded?`<span class="sub ${cls(extRow.chg)}">${st.k==='closed'?'AH':(ext.pre?'pre':'AH')} ${pct(extRow.pct)}</span>`:'';
+    html+=`<button class="hrow" onclick="showTab('holdings');openLots['${h.t}']=true;render();">
+      <span class="sym">${esc(h.t)}<small>${esc(h.name||'')}</small></span>
+      <span><b class="num">${q?money(q.c):'—'}</b>${extTag}</span>
+      <span class="${q?cls(q.dp):''}"><b class="num">${q?pct(q.dp):'—'}</b><span class="sub num ${q?cls(q.d):''}">${q?signed(q.d*sh,0):''}</span></span>
+      <span><b class="num">${money(v,0)}</b><span class="sub num ${cls(gain)}">${signed(gain,0)}</span></span>
+      <span class="w num">${fmt(T.total?v/T.total*100:0,0)}%</span></button>`;
+  }
+  html+=`<div class="hrow cash"><span class="sym">Cash<small>money market</small></span><span></span><span></span><span><b class="num">${money(S.cash,0)}</b></span><span class="w num">${fmt(T.total?S.cash/T.total*100:0,0)}%</span></div>`;
+  $('#homeList').innerHTML=html;
+  const items=[{n:'Cash',v:S.cash},...rows.map(r=>({n:r.h.t,v:r.v}))].filter(i=>i.v>0), tot=items.reduce((a,i)=>a+i.v,0)||1;
+  $('#homeAlloc').innerHTML=items.map((i,k)=>`<i style="width:${i.v/tot*100}%;background:${COLORS[(k)%COLORS.length]}" title="${i.n} ${fmt(i.v/tot*100,1)}%"></i>`).join('');
+  const watching=S.alerts.filter(a=>a.t.startsWith('step')||!a.fired).length, fired=S.alerts.filter(a=>a.fired).length;
+  const monthly=S.plan.contribs.reduce((a,c)=>a+c.amt*FREQ[c.freq].pm,0);
+  $('#homeFoot').innerHTML=`<span>Today <b class="num ${cls(T.day)}">${T.priced?signed(T.day):'—'}</b></span><span>Cost basis <b class="num">${money(T.cost,0)}</b></span>${monthly?`<span>Investing <b class="num">${money(monthly,0)}/mo</b></span>`:''}<span>Alerts <b>${watching} watching</b>${fired?` · ${fired} fired`:''}</span>${$('#lastUpd').textContent?`<span class="muted">${esc($('#lastUpd').textContent)}</span>`:''}`;
+  const missing=!hasKey()||!S.cfg.gistToken; $('#homeSetup').style.display=missing&&!S.holdings.length?'':'none'; $('#homeSetupText').textContent=$('#setupText').textContent;
+  document.body.classList.toggle('mobile',isMobile());
+}
 function rangeHTML(h){
   const m=M[h.t], p=price(h);
   if(!m||!m.hi||!m.lo||p==null) return '<span class="muted">—</span>';
@@ -1175,7 +1233,6 @@ $('#hBenchSym').addEventListener('change',()=>{fetchHistory(false);renderHist();
 =================================================================== */
 let H={}; try{H=JSON.parse(localStorage.getItem('ledger.hist')||'{}');}catch(e){}   // per-symbol {cagr,vol,years,at}, plus _corr
 let HB={}; try{HB=JSON.parse(localStorage.getItem('ledger.bars')||'{}');}catch(e){}   // per-symbol {d:[dates],c:[closes],at}
-const FREQ={weekly:{l:'Weekly',pm:52/12},biweekly:{l:'Every 2 weeks',pm:26/12},semimonthly:{l:'Twice a month',pm:2},monthly:{l:'Monthly',pm:1},quarterly:{l:'Quarterly',pm:1/3},annual:{l:'Yearly',pm:1/12}};
 const DEFAULT_RET=7, DEFAULT_VOL=18, CASH_RET=4, HIST_CAP=25;
 function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 
@@ -1393,10 +1450,10 @@ function resetAll(){ if(confirm('Erase all data and settings from this browser? 
 /* ===================================================================
    NAV + BOOT
 =================================================================== */
-function showTab(id){ document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===id)); document.querySelectorAll('section.tab').forEach(s=>s.classList.toggle('on',s.id==='tab-'+id)); if(id==='projection'){renderProj();fetchHistory(false);} if(id==='history'){renderHist();fetchHistory(false);} }
+function showTab(id){ document.body.classList.toggle('home-tab',id==='home'); document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===id)); document.querySelectorAll('section.tab').forEach(s=>s.classList.toggle('on',s.id==='tab-'+id)); if(id==='projection'){renderProj();fetchHistory(false);} if(id==='history'){renderHist();fetchHistory(false);} }
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
 try{M=JSON.parse(sessionStorage.getItem('ledger.metrics')||'{}');}catch(e){}
-render(); schedule(); (async()=>{ if(S.cfg.gistToken&&S.cfg.gistId) await syncPull(false); else pullDone=true; refreshQuotes(); })();
+document.body.classList.add('home-tab'); render(); schedule(); (async()=>{ if(S.cfg.gistToken&&S.cfg.gistId) await syncPull(false); else pullDone=true; refreshQuotes(); })();
 let rsz=null; window.addEventListener('resize',()=>{clearTimeout(rsz);rsz=setTimeout(()=>{renderProj();},200);});
 let lastK=marketStatus().k;
 setInterval(()=>{ const st=marketStatus(); if(st.k!==lastK){ lastK=st.k; refreshQuotes(); } $('#mDot').className='dot '+st.k; $('#mText').textContent=st.txt; },60000);
