@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#f3f5f4">
+<meta name="theme-color" content="#f3f4f8">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Ledger — Portfolio</title>
@@ -12,9 +12,9 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#f3f5f4; --paper:#ffffff; --ink:#18231f; --ink-2:#4e5b56; --ink-3:#8a9691;
+  --bg:#f3f4f8; --paper:#ffffff; --ink:#18231f; --ink-2:#4e5b56; --ink-3:#8a9691;
   --line:#dde3e0; --line-2:#c5cdc9;
-  --accent:#0f5c4c; --accent-soft:#e2efeb;
+  --accent:#2d3a8c; --accent-soft:#e6e9f6;
   --up:#177a46; --up-soft:#e3f2e9; --down:#b83c33; --down-soft:#f8e6e4;
   --warn:#8a5a10; --warn-soft:#f7ecd6;
   --r:6px; --r-lg:12px;
@@ -90,7 +90,7 @@ p{margin:0 0 10px}
 .btn{border:1px solid var(--line-2);background:var(--paper);border-radius:var(--r);padding:7px 12px;font-weight:500;font-size:14px}
 .btn:hover{border-color:var(--ink-3)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.btn.primary:hover{background:#0c4b3e}
+.btn.primary:hover{background:#232e70}
 .btn.sm{padding:4px 9px;font-size:13px}
 .btn.danger{color:var(--down)}
 .btn:disabled{opacity:.5;cursor:default}
@@ -779,7 +779,7 @@ function renderExt(){
 /* ===================================================================
    RENDER
 =================================================================== */
-const COLORS=['#0f5c4c','#2a7fb8','#c67c1e','#7a4ea3','#b83c33','#3a8a6e','#5b6f7a','#a24e82'];
+const COLORS=['#2d3a8c','#2a7fb8','#c67c1e','#7a4ea3','#b83c33','#3a8a6e','#5b6f7a','#a24e82'];
 function render(){
   const T=totals(), st=marketStatus();
   $('#hTotal').textContent=money(T.total);
@@ -1070,7 +1070,7 @@ async function renderDetail(){
   const bx=[],by=[],bt2=[]; for(const l of lots) if(l.d>=from){bx.push(l.d);by.push(l.p);bt2.push(fmt(l.q,3)+' sh at '+money(l.p));}
   const traces=[{x:xs,y:ys,type:'scatter',mode:'lines',name:t,line:{color:col,width:2},fill:'tozeroy',fillcolor:up?'rgba(23,122,70,.07)':'rgba(184,60,51,.07)',hovertemplate:'%{y:$,.2f}<extra></extra>'},
     {x:[xs[0],xs[xs.length-1]],y:[avg,avg],type:'scatter',mode:'lines',name:'Avg cost '+money(avg),line:{color:'#4e5b56',width:1.2,dash:'dot'},hoverinfo:'skip'},
-    {x:bx,y:by,text:bt2,type:'scatter',mode:'markers',name:'Bought',marker:{color:'#0f5c4c',size:mob?8:9,symbol:'circle',line:{color:'#fff',width:1.5}},hovertemplate:'%{text}<extra>%{x}</extra>'}];
+    {x:bx,y:by,text:bt2,type:'scatter',mode:'markers',name:'Bought',marker:{color:'#2d3a8c',size:mob?8:9,symbol:'circle',line:{color:'#fff',width:1.5}},hovertemplate:'%{text}<extra>%{x}</extra>'}];
   const lo=Math.min(...ys,avg), hi=Math.max(...ys,avg), pad=(hi-lo)*0.08||1;
   Plotly.react('dChart',traces,{paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{family:'IBM Plex Sans, system-ui, sans-serif',size:mob?11:12,color:'#4e5b56'},
     margin:{l:mob?46:56,r:10,t:6,b:mob?32:36},hovermode:'x unified',showlegend:true,legend:{orientation:'h',y:-0.2,x:0,traceorder:'normal',font:{size:mob?11:12}},
@@ -1295,12 +1295,12 @@ async function renderHist(){
     traces.push({x:days,y:gainTop,type:'scatter',mode:'lines',line:{width:0},fill:'tonexty',fillcolor:'rgba(23,122,70,.13)',hoverinfo:'skip',showlegend:false});
     traces.push({x:days,y:I,type:'scatter',mode:'lines',line:{width:0},hoverinfo:'skip',showlegend:false});
     traces.push({x:days,y:lossBot,type:'scatter',mode:'lines',line:{width:0},fill:'tonexty',fillcolor:'rgba(184,60,51,.15)',hoverinfo:'skip',showlegend:false});
-    traces.push({x:days,y:V,type:'scatter',mode:'lines',name:only?only+' value':'Value',line:{color:'#0f5c4c',width:2},hovertemplate:'%{y:$,.0f}<extra>Value</extra>'});
+    traces.push({x:days,y:V,type:'scatter',mode:'lines',name:only?only+' value':'Value',line:{color:'#2d3a8c',width:2},hovertemplate:'%{y:$,.0f}<extra>Value</extra>'});
     traces.push({x:days,y:I,type:'scatter',mode:'lines',name:'Money in',line:{color:'#4e5b56',width:1.5,shape:'hv'},hovertemplate:'%{y:$,.0f}<extra>Money in</extra>'});
   }
   if(showBench) traces.push({x:days,y:B,type:'scatter',mode:'lines',name:'Same buys in '+Hd.bench,line:{color:'#8a5a10',width:1.5,dash:'dash'},hovertemplate:'%{y:$,.0f}<extra>'+Hd.bench+'</extra>'});
   if(showBuys&&!stack){ const bx=[],by=[],bt=[]; for(const l of Hd.buys){ const i=days.indexOf(l.d); if(i>=0){bx.push(l.d);by.push(V[i]);bt.push(l.t+' '+money(l.cost));} }
-    traces.push({x:bx,y:by,text:bt,type:'scatter',mode:'markers',name:'Buy',marker:{color:'#0f5c4c',size:mob?7:8,line:{color:'#fff',width:1.5}},hovertemplate:'%{text}<extra>Buy</extra>'}); }
+    traces.push({x:bx,y:by,text:bt,type:'scatter',mode:'markers',name:'Buy',marker:{color:'#2d3a8c',size:mob?7:8,line:{color:'#fff',width:1.5}},hovertemplate:'%{text}<extra>Buy</extra>'}); }
   const layout=Object.assign({},base,{xaxis:Object.assign({},base.xaxis,{type:'date',rangeslider:{visible:!mob&&N>60,thickness:0.07}})});
   Plotly.react('perfChart',traces,layout,cfg);
   // stats
