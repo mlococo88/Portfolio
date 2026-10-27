@@ -1,0 +1,27 @@
+name: Ledger fund prices
+
+on:
+  schedule:
+    # Mutual funds publish their NAV in the evening. The nightly report also
+    # refreshes these; this later run catches NAVs that came out after it.
+    - cron: "30 2 * * 2-6"   # 02:30 UTC = 10:30 PM EDT / 9:30 PM EST
+  workflow_dispatch:      # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  navs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Update fund prices
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+        run: python navs.py

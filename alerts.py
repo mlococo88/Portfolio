@@ -18,7 +18,7 @@ Optional:
   TEST           "1" sends a test notification and exits
   CLOSE_SUMMARY  "1" to also send a daily summary just after the 4 PM close
 """
-import json, os, sys, urllib.request, urllib.error
+import json, os, re, sys, urllib.request, urllib.error
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -78,6 +78,11 @@ if not f:
 content = f["content"] if not f.get("truncated") else http(f["raw_url"], gh_headers).decode()
 S = json.loads(content)
 holdings = S.get("holdings", [])
+nf = gist["files"].get("navs.json")   # mutual-fund NAVs written by navs.py
+try:
+    NAV = json.loads(nf["content"] if not nf.get("truncated") else http(nf["raw_url"], gh_headers).decode()) if nf else {}
+except Exception:
+    NAV = {}
 alerts = S.get("alerts", [])
 cash = float(S.get("cash", 0))
 today_str = now.strftime("%Y-%m-%d")
@@ -97,11 +102,12 @@ if not holdings:
 # ---------------------------------------------------------------- quotes
 ak = env("ALPACA_KEY"); asec = env("ALPACA_SECRET")
 a_headers = {"APCA-API-KEY-ID": ak, "APCA-API-SECRET-KEY": asec}
-syms = ",".join(h["t"] for h in holdings)
+syms = ",".join(h["t"] for h in holdings if h["t"] not in NAV and not re.fullmatch(r"[A-Z]{4}X", h["t"]))
 open_session = 570 <= minutes < 960
 
 
 def snapshots(feed):
+    if not syms: return {}
     try:
         return json.loads(http(f"https://data.alpaca.markets/v2/stocks/snapshots?symbols={syms}&feed={feed}", a_headers))
     except urllib.error.HTTPError as e:
@@ -135,6 +141,9 @@ for h in holdings:
         best["d"] = best["c"] - best["pc"]
         best["dp"] = best["d"] / best["pc"] * 100 if best["pc"] else 0
         Q[s] = best
+    elif s in NAV:  # mutual fund: last NAV, with a day change only once today's NAV is out
+        n = NAV[s]; pc = (n.get("pc") or n["c"]) if n["d"] == today else n["c"]
+        Q[s] = {"c": n["c"], "pc": pc, "d": n["c"] - pc, "dp": (n["c"] - pc) / pc * 100 if pc else 0}
 
 # ---------------------------------------------------------------- valuation
 inv = cost = day = 0.0
