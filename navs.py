@@ -69,6 +69,9 @@ def yahoo(sym):
     if mp and mt:
         md = datetime.fromtimestamp(mt, ET).strftime("%Y-%m-%d")
         if md > max(byday): byday[md] = (mp, mp * byday[max(byday)][1] / byday[max(byday)][0])
+    # before today's close Yahoo lists a row for today that only repeats yesterday's NAV
+    now = datetime.now(ET); td = now.strftime("%Y-%m-%d")
+    if td in byday and len(byday) > 1 and now.hour < 16: del byday[td]
     days = sorted(byday)
     c = [byday[d][0] for d in days]
     return {"c": round(c[-1], 4), "d": days[-1],
