@@ -520,6 +520,9 @@ let Q={};          // quotes by symbol
 let M={};          // 52wk metrics by symbol {hi,lo,at}
 let timer=null, syncTimer=null, openLots={}, lastPull=0, pullDone=false;
 let PCC={}; try{PCC=JSON.parse(sessionStorage.getItem('ledger.pcc')||'{}');}catch(e){}
+let NAV={}; try{NAV=JSON.parse(localStorage.getItem('ledger.navs')||'{}');}catch(e){}   // mutual-fund NAVs from navs.json in the Gist {c,pc,ppc,d,name,hist}
+// Alpaca has no mutual funds; US fund symbols are five letters ending in X
+function isFund(s){ return !!NAV[s]||/^[A-Z]{4}X$/.test(s); }
 
 function load(){
   try{const r=localStorage.getItem(LS_KEY); if(r){const s=JSON.parse(r); s.plan=Object.assign({contribs:[],assume:{}},s.plan||{}); return Object.assign(JSON.parse(JSON.stringify(SEED)),s,{cfg:Object.assign({},SEED.cfg,s.cfg||{},{proj:Object.assign({},SEED.cfg.proj,(s.cfg||{}).proj||{})})});}}catch(e){}
@@ -641,11 +644,23 @@ async function fetchQuotesAlpaca(syms){
   }
   try{sessionStorage.setItem('ledger.pcc',JSON.stringify(PCC));}catch(e){}
 }
+function applyNavs(){
+  // A fund's quote is its latest NAV. Today's change counts only once today's NAV is out.
+  const d=today(); let named=false;
+  for(const h of S.holdings){
+    const n=NAV[h.t]; if(!n||(Q[h.t]&&Q[h.t].src!=='nav')) continue;
+    const cur=n.d===d, pc=cur?(n.pc??n.c):n.c;
+    Q[h.t]={c:n.c,pc,ppc:cur?n.ppc:n.pc,rc:cur?n.c:null,bd:n.d,d:n.c-pc,dp:pc?(n.c-pc)/pc*100:0,t:null,src:'nav'};
+    if(!h.name&&n.name){ h.name=n.name; named=true; }
+  }
+  if(named) localStorage.setItem(LS_KEY,JSON.stringify(S));
+}
 async function refreshQuotes(manual){
+  applyNavs();
   if(!hasKey()||!S.holdings.length){render();return;}
-  const syms=S.holdings.map(h=>h.t);
+  const syms=S.holdings.map(h=>h.t).filter(t=>!isFund(t));
   try{
-    if(S.cfg.provider==='alpaca') await fetchQuotesAlpaca(syms); else await fetchQuotesFinnhub(syms);
+    if(syms.length){ if(S.cfg.provider==='alpaca') await fetchQuotesAlpaca(syms); else await fetchQuotesFinnhub(syms); }
     captureCloses();
     $('#lastUpd').textContent='Updated '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
     logValue(); checkAlerts(); render();
@@ -653,6 +668,10 @@ async function refreshQuotes(manual){
   }catch(e){ $('#lastUpd').textContent=e.message==='nokey'?'':'Quotes: '+e.message; render(); }
 }
 async function fetchMetrics(syms){
+  for(const s of S.holdings.map(h=>h.t).filter(isFund)){   // funds: 52-week range from the NAV history
+    const n=NAV[s], h=n&&n.hist; if(!h) continue; const from=new Date(Date.now()-365*864e5).toISOString().slice(0,10);
+    const c=h.c.filter((x,i)=>h.d[i]>=from); if(c.length) M[s]={hi:Math.max(...c),lo:Math.min(...c),at:Date.now()};
+  }
   const stale=syms.filter(s=>!M[s]||Date.now()-M[s].at>12*3600e3);
   if(!stale.length) return;
   try{
@@ -676,6 +695,7 @@ async function fetchMetrics(syms){
   render();
 }
 async function lookupName(sym){
+  if(isFund(sym)) return NAV[sym]?NAV[sym].name||'':'';
   if(S.cfg.provider==='alpaca'){
     for(const host of ['https://paper-api.alpaca.markets','https://api.alpaca.markets']){
       try{ const r=await fa(host+'/v2/assets/'+encodeURIComponent(sym)); if(r&&r.name) return r.name; }catch(e){}
@@ -686,6 +706,7 @@ async function lookupName(sym){
   return '';
 }
 async function lookupPrice(sym){
+  if(isFund(sym)) return NAV[sym]?NAV[sym].c:null;
   try{
     if(S.cfg.provider==='alpaca'){ const j=await fa('https://data.alpaca.markets/v2/stocks/'+encodeURIComponent(sym)+'/trades/latest?feed=iex'); return j&&j.trade?j.trade.p:null; }
     const r=await fq('quote?symbol='+encodeURIComponent(sym)); return r&&r.c?r.c:null;
@@ -770,7 +791,7 @@ function renderExt(){
         <div><span>Total gain now</span><b class="num ${cls(x.gain)}">${signed(x.gain)} (${pct(x.cost?x.gain/x.cost*100:0)})</b></div>
         <div><span>Since prior close</span><b class="num ${cls(x.extChg+x.regChg)}">${x.pre?signed(x.extChg)+' ('+pct(x.extPct)+')':x.haveReg?signed(x.extChg+x.regChg):'—'}</b></div>
       </div>
-      <div class="syms">${x.rows.map(r=>`<span title="${r.src==='quote'?'IEX bid/ask midpoint':r.src==='delayed'?'consolidated price, 15-minute delayed':'IEX last trade'} at ${esc(r.when)}"><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span> <span class="muted">${esc(r.when)}${r.src==='quote'?' mid':r.src==='delayed'?' ·15m':''}</span></span>`).join('')}</div>
+      <div class="syms">${x.rows.map(r=>`<span title="${r.src==='nav'?'mutual fund NAV':(r.src==='quote'?'IEX bid/ask midpoint':r.src==='delayed'?'consolidated price, 15-minute delayed':'IEX last trade')+' at '+esc(r.when)}"><b>${esc(r.t)}</b> <span class="num">${money(r.c)}</span> <span class="num ${cls(r.chg)}">${signed(r.chg)} · ${pct(r.pct)}</span> <span class="muted">${r.src==='nav'?'NAV':esc(r.when)+(r.src==='quote'?' mid':r.src==='delayed'?' ·15m':'')}</span></span>`).join('')}</div>
       ${x.anyExt?'':'<p class="note">No '+lbl.toLowerCase()+' trades reported'+(x.closed?'':' yet')+' — showing the last close.</p>'}
       ${x.haveAll?'':'<p class="note">Today\'s 4 pm close isn\'t available, so the after-hours move is measured from yesterday\'s close.</p>'}
     </div>`;
@@ -928,6 +949,7 @@ function openTrade(t,side){
       <label class="field">Date<input id="tDate" type="date" value="${today()}"></label>
       <label class="field">Deduct from cash?<select id="tCash"><option value="1">Yes</option><option value="0">No</option></select></label>
     </div>
+    ${isNew?'<p class="note" id="tFund" style="display:none">Looks like a mutual fund. Funds price once a day, so enter what you paid; the app fills in the daily price (NAV) after the nightly update.</p>':''}
     <div class="preview" id="tPrev">Enter an amount and price.</div>
     <div class="foot"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="commitTrade('${side}',${isNew?'null':`'${t}'`})">${side==='buy'?'Record purchase':'Record sale'}</button></div>`);
   const upd=()=>{
@@ -940,7 +962,7 @@ function openTrade(t,side){
   ['tQty','tPx'].forEach(id=>$('#'+id).addEventListener('input',upd));
   $('#tMode').addEventListener('change',()=>{ const usd=$('#tMode').value==='usd'; $('#tQtyLbl').textContent=usd?'Amount ($)':'Shares'; $('#tQty').step=usd?'0.01':'0.001'; $('#tQty').placeholder=usd?'0.00':'0.000'; $('#tQty').value=''; upd(); $('#tQty').focus(); });
   if(!isNew) setTimeout(()=>{const f=$('#tQty'); if(f) f.focus();},60);
-  if(isNew){ $('#tSym').addEventListener('change',async()=>{ const s=$('#tSym').value.trim().toUpperCase(); if(!s||!hasKey())return; const px=await lookupPrice(s); if(px&&!$('#tPx').value){$('#tPx').value=px.toFixed(2);upd();} if(!$('#tName').value){const n=await lookupName(s); if(n)$('#tName').value=n;} }); }
+  if(isNew){ $('#tSym').addEventListener('change',async()=>{ const s=$('#tSym').value.trim().toUpperCase(); $('#tFund').style.display=s&&isFund(s)&&!NAV[s]?'':'none'; if(!s||(!hasKey()&&!NAV[s]))return; const px=await lookupPrice(s); if(px&&!$('#tPx').value){$('#tPx').value=px.toFixed(2);upd();} if(!$('#tName').value){const n=await lookupName(s); if(n)$('#tName').value=n;} }); }
 }
 function tradeVals(){
   const raw=+$('#tQty').value||0, px=+$('#tPx').value||0, usd=$('#tMode')&&$('#tMode').value==='usd';
@@ -1202,7 +1224,7 @@ function xirr(flows){ if(flows.length<2) return null; const t0=Date.parse(flows[
 /* intraday (1D / 5D) */
 async function fetchIntraday(syms,tf,startISO){
   const key=syms.join(',')+'|'+tf+'|'+startISO; if(IB[key]&&Date.now()-IB[key].at<120e3) return IB[key].data;
-  let page=null, bars={};
+  let page=null, bars={}; syms=syms.filter(x=>!isFund(x)); if(!syms.length) return bars;
   do{ const j=await fa('https://data.alpaca.markets/v2/stocks/bars?symbols='+encodeURIComponent(syms.join(','))+'&timeframe='+tf+'&start='+encodeURIComponent(startISO)+'&limit=10000&feed=iex'+(page?'&page_token='+encodeURIComponent(page):''));
     for(const x in (j.bars||{})) bars[x]=(bars[x]||[]).concat(j.bars[x]); page=j.next_page_token; }while(page);
   IB[key]={data:bars,at:Date.now()}; return bars;
@@ -1362,12 +1384,13 @@ async function fetchHistory(force){
   $('#histNote').textContent='Loading price history…';
   try{
     const start=new Date(Date.now()-5*365.25*864e5).toISOString().slice(0,10);
-    let page=null, bars={};
-    do{
-      const j=await fa('https://data.alpaca.markets/v2/stocks/bars?symbols='+encodeURIComponent(syms.join(','))+'&timeframe=1Day&start='+start+'&limit=10000&feed=iex&adjustment=all'+(page?'&page_token='+encodeURIComponent(page):''));
+    let page=null, bars={}; const req=syms.filter(x=>!isFund(x));
+    while(req.length){
+      const j=await fa('https://data.alpaca.markets/v2/stocks/bars?symbols='+encodeURIComponent(req.join(','))+'&timeframe=1Day&start='+start+'&limit=10000&feed=iex&adjustment=all'+(page?'&page_token='+encodeURIComponent(page):''));
       for(const x in (j.bars||{})) bars[x]=(bars[x]||[]).concat(j.bars[x]);
-      page=j.next_page_token;
-    }while(page);
+      page=j.next_page_token; if(!page) break;
+    }
+    for(const x of syms){ const h=NAV[x]&&NAV[x].hist; if(h) bars[x]=h.d.map((d,i)=>({t:d,c:h.c[i]})).filter(k=>k.t>=start); }
     const series={};
     for(const x of syms){
       const b=(bars[x]||[]).filter(k=>k.c>0);
@@ -1527,6 +1550,10 @@ async function syncPull(manual){
     const j=await r.json(); const f=j.files&&j.files['ledger.json']; if(!f) throw new Error('Gist has no ledger.json');
     let txt=f.content; if(f.truncated){ txt=await (await fetch(f.raw_url)).text(); }
     const remote=JSON.parse(txt);
+    const nf=j.files['navs.json'];
+    if(nf){ try{ const nt=nf.truncated?await (await fetch(nf.raw_url)).text():nf.content; const nv=JSON.parse(nt);
+      for(const x in nv) if(!NAV[x]||NAV[x].d!==nv[x].d||NAV[x].c!==nv[x].c){ delete HB[x]; delete H[x]; delete M[x]; if(Q[x]&&Q[x].src==='nav') delete Q[x]; }
+      NAV=nv; localStorage.setItem('ledger.navs',JSON.stringify(NAV)); applyNavs(); }catch(e){} }
     if(manual||(remote.updatedAt||0)>(S.updatedAt||0)){
       Object.assign(S,{holdings:remote.holdings||[],cash:remote.cash||0,sold:remote.sold||[],alerts:remote.alerts||[],log:remote.log||[],plan:Object.assign({contribs:[],assume:{}},remote.plan||{}),updatedAt:remote.updatedAt||0});
       if(remote.cfg){ if(remote.cfg.proj)S.cfg.proj=Object.assign({},S.cfg.proj,remote.cfg.proj); if(remote.cfg.refresh)S.cfg.refresh=remote.cfg.refresh; if(remote.cfg.ntfy&&!S.cfg.ntfy)S.cfg.ntfy=remote.cfg.ntfy; }

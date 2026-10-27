@@ -7,11 +7,13 @@ after-hours prices from Alpaca, and pushes a written summary to your phone
 through ntfy. If ANTHROPIC_API_KEY is set, the summary is written by Claude
 from the day's facts; otherwise it is assembled from a template.
 
+Mutual funds are priced from navs.json (see navs.py), refreshed at the start of each run.
+
 Required secrets:  GIST_TOKEN, GIST_ID, ALPACA_KEY, ALPACA_SECRET, NTFY_TOPIC
 Optional secrets:  ANTHROPIC_API_KEY
 Optional vars:     CLAUDE_MODEL (default claude-sonnet-5), NTFY_SERVER
 """
-import json, os, sys, urllib.request, urllib.error
+import json, os, re, sys, urllib.request, urllib.error
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -63,6 +65,12 @@ gh_headers = {"Authorization": "Bearer " + tok, "Accept": "application/vnd.githu
 gist = json.loads(http(f"{GH}/gists/{gid}", gh_headers))
 f = gist["files"].get("ledger.json") or sys.exit("Gist has no ledger.json")
 S = json.loads(f["content"] if not f.get("truncated") else http(f["raw_url"], gh_headers).decode())
+# mutual-fund NAVs (Alpaca has none); refreshed on every run, even after the report went out
+try:
+    import navs as navmod
+    NAV = navmod.run(gist, tok, gid) or {}
+except (Exception, SystemExit) as e:
+    print("fund prices skipped:", e); NAV = {}
 if not force and S.get("lastReport") == today:
     print("report already sent today"); sys.exit(0)
 holdings = S.get("holdings", []); cash = float(S.get("cash", 0)); log = sorted(S.get("log", []), key=lambda p: p["d"])
@@ -71,10 +79,11 @@ if not holdings:
 
 # ---------------------------------------------------------------- prices
 a_headers = {"APCA-API-KEY-ID": env("ALPACA_KEY"), "APCA-API-SECRET-KEY": env("ALPACA_SECRET")}
-syms = ",".join(h["t"] for h in holdings)
+syms = ",".join(h["t"] for h in holdings if h["t"] not in NAV and not re.fullmatch(r"[A-Z]{4}X", h["t"]))
 
 
 def snapshots(feed):
+    if not syms: return {}
     try:
         return json.loads(http(f"https://data.alpaca.markets/v2/stocks/snapshots?symbols={syms}&feed={feed}", a_headers))
     except urllib.error.HTTPError as e:
@@ -96,6 +105,8 @@ for h in holdings:
         close, prev = db["c"], (pdb["c"] if pdb else db["o"])
     elif db:
         close, prev = db["c"], (pdb["c"] if pdb else db["c"])
+    elif s in NAV:   # mutual fund: today's change only once today's NAV is out
+        n = NAV[s]; close = n["c"]; prev = (n.get("pc") or close) if n["d"] == today else close
     else:
         continue
     # after-hours: freshest trade after 4 PM from either feed
