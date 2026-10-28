@@ -654,6 +654,10 @@ const fundToday=q=>q.src==='nav'&&q.bd===today();   // a fund's NAV move belongs
 const navDate=d=>{const [,m,x]=d.split('-');return +m+'/'+ +x;};   // 2026-10-27 -> 10/27
 const navLabel=d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short'})+' '+navDate(d)+' close';   // Tue 10/27 close
 const FUNDS_NOTE='price once a day, after the 4 PM close';
+// after a session closes and until that session's NAV arrives, a fund's move is pending
+const navPending=q=>!!q&&q.src==='nav'&&marketStatus().k!=='open'&&q.bd<lastSession();
+const navOnTime=()=>{const p=etParts(new Date());return p.d===lastSession()&&p.m<1260;};   // before 9 PM on the session's own day
+const pendingWhen=short=>navOnTime()?(short?'by 9 PM':'usually by 9 PM ET'):(short?'running late':'running late, check back soon');
 const byKind=hs=>[...hs.filter(h=>!isFund(h.t)),...hs.filter(h=>isFund(h.t))];
 function lastSession(){
   // the most recent trading day whose 4 PM close has passed
@@ -805,10 +809,10 @@ function renderExt(){
       <div class="big num">${money(x.regClose)}</div>
       ${x.funds?`<div class="stats">
         <div><span>Stocks</span><b class="num ${cls(x.regChg)}">${x.haveReg?signed(x.regChg)+' ('+pct(x.stockPct)+')':'—'}</b></div>
-        <div><span>Funds</span>${x.fundPending&&!x.fundChg?'<b class="muted" style="font-weight:500">after 6–8 PM</b>':`<b class="num ${cls(x.fundChg)}">${signed(x.fundChg)} (${pct(x.fundPct)})</b>`}</div>
+        <div><span>Funds</span>${x.fundPending&&!x.fundChg?'<b class="muted" style="font-weight:500">Pending</b>':`<b class="num ${cls(x.fundChg)}">${signed(x.fundChg)} (${pct(x.fundPct)})</b>`}</div>
         <div><span>${x.fundPending?'Total so far':'Total change'}</span><b class="num ${cls(x.sumChg)}">${x.haveReg?signed(x.sumChg)+' ('+pct(x.sumPct)+')':'—'}</b></div>
       </div>
-      <p class="pfoot">Total gain at close <b class="num ${cls(x.closeGain)}">${signed(x.closeGain)}</b> · Cash <b class="num">${money(S.cash)}</b></p>`:`<div class="stats">
+      <p class="pfoot">Total gain at close <b class="num ${cls(x.closeGain)}">${signed(x.closeGain)}</b> · Cash <b class="num">${money(S.cash)}</b>${x.fundPending?' · fund prices '+pendingWhen():''}</p>`:`<div class="stats">
         <div><span>Session change</span><b class="num ${cls(x.regChg)}">${x.haveReg?signed(x.regChg)+' ('+pct(x.regPct)+')':'—'}</b></div>
         <div><span>Total gain at close</span><b class="num ${cls(x.closeGain)}">${signed(x.closeGain)} (${pct(x.cost?x.closeGain/x.cost*100:0)})</b></div>
         <div><span>Cash</span><b class="num">${money(S.cash)}</b></div>
@@ -865,7 +869,7 @@ function renderHome(T){
     html+=`<button class="hrow" onclick="openDetail('${h.t}')">
       <span class="sym">${esc(h.t)}<small>${esc(h.name||'')}</small></span>
       <span><b class="num">${q?money(q.c):'—'}</b>${extTag}</span>
-      <span class="${q?cls(q.dp):''}"><b class="num">${q?pct(q.dp):'—'}</b><span class="sub num ${q?cls(q.d):''}">${q?signed(q.d*sh,0):''}</span></span>
+      ${navPending(q)?`<span><b class="muted" style="font-weight:500">Pending</b><span class="sub">${pendingWhen(true)}</span></span>`:`<span class="${q?cls(q.dp):''}"><b class="num">${q?pct(q.dp):'—'}</b><span class="sub num ${q?cls(q.d):''}">${q?signed(q.d*sh,0):''}</span></span>`}
       <span><b class="num">${money(v,0)}</b><span class="sub num ${cls(gain)}">${signed(gain,0)}</span></span>
       <span class="w num">${fmt(T.total?v/T.total*100:0,0)}%</span></button>`;
   }
@@ -897,7 +901,7 @@ function renderTable(T){
     html+=`<tr>
       <td style="cursor:pointer" onclick="openDetail('${h.t}')"><div class="sym">${esc(h.t)} <span class="muted" style="font-weight:400;font-size:12px">›</span></div><div class="nm" title="${esc(h.name||'')}">${esc(h.name||'')}</div></td>
       <td class="num">${q?money(q.c)+'<div class="sub '+cls(q.d)+'">'+signed(q.d)+(q.src==='nav'?' · '+navLabel(q.bd):'')+'</div>':'<span class="muted">—</span>'}</td>
-      <td class="num ${cls(dayg)}">${q?signed(dayg)+'<div class="sub">'+pct(q.dp)+'</div>':'—'}</td>
+      <td class="num ${navPending(q)?'':cls(dayg)}">${navPending(q)?'<span class="muted">Pending</span><div class="sub">'+pendingWhen()+'</div>':q?signed(dayg)+'<div class="sub">'+pct(q.dp)+'</div>':'—'}</td>
       <td class="num ${cls(gain)}">${q?signed(gain)+'<div class="sub">'+pct(b?gain/b*100:0)+'</div>':'—'}</td>
       <td class="num">${money(v)}<div class="sub">${fmt(T.total?v/T.total*100:0)}%</div></td>
       <td class="num">${fmt(sh,3)}<div class="sub">avg ${money(b/sh)}</div></td>
@@ -928,7 +932,7 @@ function renderCards(T){
     const q=Q[h.t], sh=shares(h), b=basis(h), v=value(h), gain=v-b, dayg=q?q.d*sh:null;
     if(mixed&&h===hs.find(x=>isFund(x.t))) html+=`<div class="hsec" style="border:0;padding:8px 2px 6px">Funds <span>· ${FUNDS_NOTE}</span></div>`;
     html+=`<div class="hcard">
-      <div class="top"><div onclick="openDetail('${h.t}')" style="cursor:pointer"><div class="sym">${esc(h.t)} <span class="muted" style="font-weight:400;font-size:13px">›</span></div><div class="nm">${esc(h.name||'')}</div></div><div style="text-align:right"><div class="big num">${money(v)}</div><div class="num ${cls(dayg)}" style="font-size:13px">${q?signed(dayg)+(q.src==='nav'?' · '+navLabel(q.bd):' today')+' ('+pct(q.dp)+')':'no quote'}</div></div></div>
+      <div class="top"><div onclick="openDetail('${h.t}')" style="cursor:pointer"><div class="sym">${esc(h.t)} <span class="muted" style="font-weight:400;font-size:13px">›</span></div><div class="nm">${esc(h.name||'')}</div></div><div style="text-align:right"><div class="big num">${money(v)}</div><div class="num ${navPending(q)?'muted':cls(dayg)}" style="font-size:13px">${navPending(q)?'Today pending · '+pendingWhen():q?signed(dayg)+(q.src==='nav'?' · '+navLabel(q.bd):' today')+' ('+pct(q.dp)+')':'no quote'}</div></div></div>
       <div class="kv">
         <span>Last</span><b class="num">${q?money(q.c)+' ('+signed(q.d)+')'+(q.src==='nav'?' · '+navLabel(q.bd):''):'—'}</b>
         <span>Total gain</span><b class="num ${cls(gain)}">${q?signed(gain)+' ('+pct(b?gain/b*100:0)+')':'—'}</b>
@@ -1086,7 +1090,7 @@ async function renderDetail(){
       <div class="kv6">
         <div><div class="k">Value</div><div class="v num">${money(v)}</div><div class="s num">${fmt(T.total?v/T.total*100:0,1)}% of account</div></div>
         <div><div class="k">Total gain</div><div class="v num ${cls(gain)}">${signed(gain)}</div><div class="s num ${cls(gain)}">${pct(b?gain/b*100:0)}</div></div>
-        <div><div class="k">${q&&q.src==='nav'?navLabel(q.bd).replace(' close',''):'Today'}</div><div class="v num ${q?cls(q.d):''}">${q?signed(q.d*sh):'—'}</div><div class="s num">${q?pct(q.dp):''}</div></div>
+        ${navPending(q)?`<div><div class="k">Today</div><div class="v muted">Pending</div><div class="s">${pendingWhen()}</div></div>`:`<div><div class="k">${q&&q.src==='nav'?navLabel(q.bd).replace(' close',''):'Today'}</div><div class="v num ${q?cls(q.d):''}">${q?signed(q.d*sh):'—'}</div><div class="s num">${q?pct(q.dp):''}</div></div>`}
         <div><div class="k">Shares</div><div class="v num">${fmt(sh,3)}</div><div class="s">${lots.length} lot${lots.length>1?'s':''}</div></div>
         <div><div class="k">Avg cost</div><div class="v num">${money(avg)}</div><div class="s num">${q?(q.c>=avg?'price is '+pct((q.c-avg)/avg*100)+' above':'price is '+pct((q.c-avg)/avg*100)+' below'):''}</div></div>
         <div><div class="k">Cost basis</div><div class="v num">${money(b)}</div><div class="s">${lots[0]?'since '+lots[0].d:''}</div></div>
