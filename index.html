@@ -62,6 +62,7 @@ header{background:var(--paper);border-top:6px solid var(--accent);border-bottom:
 .panel .syms>span{font-size:13px;padding:3px 9px;border:1px solid var(--line);border-radius:99px;background:#fff}
 .panel .syms b{font-weight:600}
 .panel .note{margin:8px 0 0}
+.panel .pfoot{margin:8px 0 0;font-size:12px;color:var(--ink-2)}
 @media (max-width:760px){.panels{grid-template-columns:1fr;gap:10px;padding:14px 0 10px}.panel .big{font-size:28px}}
 .ext{display:none;border-top:1px solid var(--line);padding:12px 0 14px}
 .ext.on{display:block}
@@ -752,6 +753,8 @@ function extInfo(){
   const st=marketStatus(); if(st.k==='open')return null;
   const closed=st.k==='closed', pre=!closed&&st.txt==='Pre-market', d=today();
   let extChg=0,regChg=0,base=0,haveAll=true,anyExt=false,haveReg=true,rows=[],sessionDate=null;
+  let funds=0,fundChg=0,fundBase=0,fundPending=false,stockBase=0;   // funds' own move for the last session, shown beside the stocks'
+  const ls=lastSession();
   for(const h of S.holdings){
     const q=Q[h.t]; if(!q){haveAll=false;haveReg=false;continue;}
     const sh=shares(h);
@@ -759,9 +762,10 @@ function extInfo(){
     // which session's close are we measuring from?
     const barToday=q.rc!=null;                      // today's regular session has a bar
     const sday=closed?(q.bd||d):d;                  // date of the session the close belongs to
-    if(!sessionDate)sessionDate=sday;
+    if(!sessionDate&&q.src!=='nav')sessionDate=sday;
     let ref, prev, traded;
-    if(q.src==='nav'){ ref=q.c; prev=q.c; traded=false; }   // funds aren't part of session or extended-hours moves
+    if(q.src==='nav'){ ref=q.c; prev=q.c; traded=false; funds++;   // funds aren't part of the stocks' session or extended-hours moves
+      if(q.bd===ls){ fundChg+=(q.c-q.pc)*sh; fundBase+=q.pc*sh; } else fundPending=true; }
     else if(pre){ ref=q.pc; prev=q.ppc; traded=qt&&qt.d===d&&qt.m<570; }
     else{
       if(barToday){ ref=q.rc; prev=q.pc; }
@@ -775,10 +779,13 @@ function extInfo(){
     if(traded) anyExt=true;
     const chg=(cur-ref)*sh; extChg+=chg; base+=ref*sh;
     if(prev!=null) regChg+=(ref-prev)*sh; else haveReg=false;
+    if(q.src!=='nav') stockBase+=(prev??ref)*sh;
     rows.push({t:h.t,c:cur,close:ref,chg:cur-ref,pct:ref?(cur-ref)/ref*100:0,traded,when:q.t?fmtWhen(q.t):'',src:q.src});
   }
-  const T=totals();
-  return {pre,closed,sessionDate,extChg,extPct:base+S.cash?extChg/(base+S.cash)*100:0,regClose:base+S.cash,regChg,regPct:base+S.cash-regChg?regChg/(base+S.cash-regChg)*100:0,haveReg,
+  const T=totals(), prior=base+S.cash-regChg-fundChg;
+  if(!sessionDate) sessionDate=ls;
+  return {pre,closed,sessionDate,funds,fundChg,fundPct:fundBase?fundChg/fundBase*100:0,fundPending,stockPct:stockBase?regChg/stockBase*100:0,
+          sumChg:regChg+fundChg,sumPct:prior?(regChg+fundChg)/prior*100:0,extChg,extPct:base+S.cash?extChg/(base+S.cash)*100:0,regClose:base+S.cash,regChg,regPct:base+S.cash-regChg?regChg/(base+S.cash-regChg)*100:0,haveReg,
           closeGain:base-T.cost,cost:T.cost,total:T.total,gain:T.gain,haveAll,anyExt,rows};
 }
 function fmtWhen(unix){ const dt=new Date(unix*1000), sameDay=etParts(dt).d===today();
@@ -796,11 +803,16 @@ function renderExt(){
     <div class="panel">
       <div class="ph"><b>${closeLbl}</b><span>regular session${x.pre?'':' · 4:00 PM ET'}</span></div>
       <div class="big num">${money(x.regClose)}</div>
-      <div class="stats">
+      ${x.funds?`<div class="stats">
+        <div><span>Stocks</span><b class="num ${cls(x.regChg)}">${x.haveReg?signed(x.regChg)+' ('+pct(x.stockPct)+')':'—'}</b></div>
+        <div><span>Funds</span>${x.fundPending&&!x.fundChg?'<b class="muted" style="font-weight:500">after 6–8 PM</b>':`<b class="num ${cls(x.fundChg)}">${signed(x.fundChg)} (${pct(x.fundPct)})</b>`}</div>
+        <div><span>${x.fundPending?'Total so far':'Total change'}</span><b class="num ${cls(x.sumChg)}">${x.haveReg?signed(x.sumChg)+' ('+pct(x.sumPct)+')':'—'}</b></div>
+      </div>
+      <p class="pfoot">Total gain at close <b class="num ${cls(x.closeGain)}">${signed(x.closeGain)}</b> · Cash <b class="num">${money(S.cash)}</b></p>`:`<div class="stats">
         <div><span>Session change</span><b class="num ${cls(x.regChg)}">${x.haveReg?signed(x.regChg)+' ('+pct(x.regPct)+')':'—'}</b></div>
         <div><span>Total gain at close</span><b class="num ${cls(x.closeGain)}">${signed(x.closeGain)} (${pct(x.cost?x.closeGain/x.cost*100:0)})</b></div>
         <div><span>Cash</span><b class="num">${money(S.cash)}</b></div>
-      </div>
+      </div>`}
       <div class="syms">${x.rows.map(r=>`<span><b>${esc(r.t)}</b> <span class="num">${money(r.close)}</span></span>`).join('')}</div>
     </div>
     <div class="panel live">
