@@ -2,9 +2,12 @@ name: Ledger fund prices
 
 on:
   schedule:
-    # Mutual funds publish their NAV in the evening. The nightly report also
-    # refreshes these; this later run catches NAVs that came out after it.
-    - cron: "30 2 * * 2-6"   # 02:30 UTC = 10:30 PM EDT / 9:30 PM EST
+    # Mutual funds publish their NAV between about 6 and 8 PM Eastern. GitHub
+    # often starts scheduled runs late or skips them, so check several times
+    # through the evening (odd minutes are less congested than :00).
+    - cron: "37 22,23 * * 1-5"   # 6:37 / 7:37 PM EDT (5:37 / 6:37 PM EST)
+    - cron: "7,37 0 * * 2-6"     # 8:07 / 8:37 PM EDT (7:07 / 7:37 PM EST)
+    - cron: "37 1,2,3 * * 2-6"   # 9:37 / 10:37 / 11:37 PM EDT
   workflow_dispatch:      # lets you run it by hand from the Actions tab
 
 permissions:

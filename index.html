@@ -644,13 +644,22 @@ async function fetchQuotesAlpaca(syms){
   }
   try{sessionStorage.setItem('ledger.pcc',JSON.stringify(PCC));}catch(e){}
 }
+function lastSession(){
+  // the most recent trading day whose 4 PM close has passed
+  const p=etParts(new Date()); let dt=new Date(p.d+'T12:00:00Z');
+  const trading=x=>{const w=x.getUTCDay(), s=x.toISOString().slice(0,10); return w>0&&w<6&&!HOLIDAYS.has(s);};
+  if(trading(dt)&&p.m>=960) return p.d;
+  do dt=new Date(dt-864e5); while(!trading(dt));
+  return dt.toISOString().slice(0,10);
+}
 function applyNavs(){
-  // A fund's quote is its latest NAV. Today's change counts only once today's NAV is out.
-  const d=today(); let named=false;
+  // A fund's quote is its latest NAV. A fund's NAV comes out after the close, so its move is treated like an
+  // after-hours move: it shows from the moment the NAV arrives until the next regular session opens.
+  const show=marketStatus().k!=='open', ls=lastSession(); let named=false;
   for(const h of S.holdings){
     const n=NAV[h.t]; if(!n||(Q[h.t]&&Q[h.t].src!=='nav')) continue;
-    const cur=n.d===d, pc=cur?(n.pc??n.c):n.c;
-    Q[h.t]={c:n.c,pc,ppc:cur?n.ppc:n.pc,rc:cur?n.c:null,bd:n.d,d:n.c-pc,dp:pc?(n.c-pc)/pc*100:0,t:null,src:'nav'};
+    const pc=show&&n.d===ls&&n.pc!=null?n.pc:n.c;
+    Q[h.t]={c:n.c,pc,ppc:pc,rc:null,bd:n.d,d:n.c-pc,dp:pc?(n.c-pc)/pc*100:0,t:n.at||null,src:'nav'};
     if(!h.name&&n.name){ h.name=n.name; named=true; }
   }
   if(named) localStorage.setItem(LS_KEY,JSON.stringify(S));
@@ -742,7 +751,8 @@ function extInfo(){
     const sday=closed?(q.bd||d):d;                  // date of the session the close belongs to
     if(!sessionDate)sessionDate=sday;
     let ref, prev, traded;
-    if(pre){ ref=q.pc; prev=q.ppc; traded=qt&&qt.d===d&&qt.m<570; }
+    if(q.src==='nav'){ ref=q.pc; prev=q.pc; traded=q.c!==q.pc; }   // fund: its NAV move counts as extended hours
+    else if(pre){ ref=q.pc; prev=q.ppc; traded=qt&&qt.d===d&&qt.m<570; }
     else{
       if(barToday){ ref=q.rc; prev=q.pc; }
       else if(closed){ ref=q.pc; prev=q.ppc; }
