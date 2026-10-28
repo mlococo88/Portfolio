@@ -105,8 +105,8 @@ for h in holdings:
         close, prev = db["c"], (pdb["c"] if pdb else db["o"])
     elif db:
         close, prev = db["c"], (pdb["c"] if pdb else db["c"])
-    elif s in NAV:   # mutual fund: today's change only once today's NAV is out
-        n = NAV[s]; close = n["c"]; prev = (n.get("pc") or close) if n["d"] == today else close
+    elif s in NAV:   # mutual fund: its latest NAV and that NAV's own change, listed apart from the stocks
+        n = NAV[s]; close = n["c"]; prev = n.get("pc") or close
     else:
         continue
     # after-hours: freshest trade after 4 PM from either feed
@@ -122,9 +122,12 @@ for h in holdings:
                  "value": close * sh, "day": (close - prev) * sh, "gain": close * sh - cb,
                  "ah": ah["p"] if ah else None, "ah_pct": (ah["p"] - close) / close * 100 if ah else None,
                  "ah_when": ah["t"].strftime("%-I:%M %p") if ah else None,
-                 "bought_today": [l for l in h["lots"] if l.get("d") == today]})
+                 "bought_today": [l for l in h["lots"] if l.get("d") == today],
+                 "fund": (datetime.strptime(NAV[s]["d"], "%Y-%m-%d").strftime("%a %-m/%-d") + " close") if not db and s in NAV else None})
 
-inv = sum(r["value"] for r in rows); cost = sum(r["basis"] for r in rows); day = sum(r["day"] for r in rows)
+rows.sort(key=lambda r: r["fund"] is not None)   # stocks first, then funds
+# the day change is stocks only, as in the app; funds have their own once-a-day change
+inv = sum(r["value"] for r in rows); cost = sum(r["basis"] for r in rows); day = sum(r["day"] for r in rows if not r["fund"])
 total = inv + cash; prev_total = total - day
 ah_total = sum((r["ah"] if r["ah"] else r["close"]) * r["sh"] for r in rows) + cash
 
@@ -147,7 +150,7 @@ facts = {
     "week_to_date": signed(total - v_wk) if v_wk else None, "month_to_date": signed(total - v_mo) if v_mo else None,
     "holdings": [{"symbol": r["t"], "name": r["name"], "close": money(r["close"]), "day_change": signed(r["chg"]) + " (" + pct(r["pct"]) + ")",
                   "position_day_change": signed(r["day"]), "position_value": money(r["value"]), "weight": f"{r['value'] / total * 100:.0f}%",
-                  "total_gain": signed(r["gain"]),
+                  "total_gain": signed(r["gain"]), **({"fund_price_for": r["fund"]} if r["fund"] else {}),
                   "after_hours": (money(r["ah"]) + " (" + pct(r["ah_pct"]) + ") as of " + r["ah_when"]) if r["ah"] else "no after-hours trades reported",
                   "bought_today": [f"{l['q']:.3f} shares at {money(l['p'])}" for l in r["bought_today"]]} for r in rows],
     "after_hours_account": money(ah_total) if any(r["ah"] for r in rows) else None,
@@ -157,12 +160,17 @@ facts = {
 
 # ---------------------------------------------------------------- narrative
 def template(F):
-    L = [f"Close  {F['account_total']}   {F['day_change']} ({F['day_pct']})"]
+    funds = any(r["fund"] for r in rows)
+    L = [f"Close  {F['account_total']}   {'stocks ' if funds else ''}{F['day_change']} ({F['day_pct']})"]
     if F["after_hours_account"]:
         L.append(f"After hours  {F['after_hours_account']}")
     L.append("")
     for r in rows:
+        if r["fund"] and r is next(x for x in rows if x["fund"]):
+            L.append("Funds (price once a day)")
         line = f"{r['t']:<5} {money(r['close'])}  {pct(r['pct'])}  {signed(r['day'])}"
+        if r["fund"]:
+            line += f"  {r['fund']}"
         if r["ah"]:
             line += f"\n      after hrs {money(r['ah'])} ({pct(r['ah_pct'])})"
         L.append(line)
@@ -188,6 +196,8 @@ def claude_narrative(F):
               "Using only the facts below, produce PLAIN TEXT (no markdown, no bullets, no emojis) laid out as short lines, in this order:\n"
               "1. One line: what the account did today (closing total, dollar and percent change).\n"
               "2. One line per holding: symbol, close, day change, what it did to the position; add after-hours if any traded.\n"
+              "   Holdings with fund_price_for are mutual funds, priced once a day: list them after the stocks under a 'Funds' line, "
+              "naming the close their price is for (fund_price_for). The account day change covers stocks only; when there are funds, call it the stocks' change.\n"
               "3. If anything was bought or sold, one line each.\n"
               "4. One line: where the week and month stand, and total gain.\n"
               "5. One closing sentence that names what drove the day, in a calm matter-of-fact voice.\n"

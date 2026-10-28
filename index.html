@@ -141,6 +141,10 @@ tr.lotrow td{padding:4px 8px}
 .hrow.cash{cursor:default}
 .hhead{display:grid;grid-template-columns:minmax(64px,1.2fr) 1fr 1fr 1.2fr 56px;gap:8px;font-size:11px;color:var(--ink-3);text-align:right;padding:8px 0 4px;border-bottom:1px solid var(--line)}
 .hhead span:first-child{text-align:left}
+.hsec{display:flex;align-items:baseline;gap:6px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);padding:14px 0 2px;border-bottom:1px solid var(--line)}
+.hsec span{font-weight:400;letter-spacing:0;text-transform:none;color:var(--ink-3)}
+tr.sec td{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);padding-top:14px}
+tr.sec td span{font-weight:400;letter-spacing:0;text-transform:none;color:var(--ink-3)}
 .hfoot{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--ink-2);margin-top:6px}
 .hfoot b{font-weight:600;color:var(--ink)}
 body.home-tab.mobile .panel .syms,body.home-tab.mobile .panel .note{display:none}
@@ -293,7 +297,7 @@ body.home-tab.mobile .panel .stats span{font-size:11px}
         <div class="label">Account total</div>
         <div class="total num" id="hTotal">—</div>
       </div>
-      <div class="stat"><span class="muted">Today</span><b class="num" id="hDay">—</b></div>
+      <div class="stat"><span class="muted" id="hDayLbl">Today</span><b class="num" id="hDay">—</b></div>
       <div class="stat"><span class="muted">Total gain</span><b class="num" id="hGain">—</b></div>
       <div class="stat"><span class="muted">Cash</span><b class="num" id="hCash">—</b></div>
       <div class="market"><span class="dot" id="mDot"></span><span id="mText">Market status</span><span class="sync" id="syncTxt"></span></div>
@@ -558,12 +562,10 @@ function price(h){return Q[h.t]?Q[h.t].c:null}
 function value(h){const p=price(h);return p==null?basis(h):p*shares(h)}
 function dayPct(T){const base=T.total-T.day;return base?T.day/base*100:0}
 function totals(){
-  let inv=0,cost=0,day=0,priced=true,fundDay=0,funds=0,fundIn=false,fundD=null;
-  for(const h of S.holdings){inv+=value(h);cost+=basis(h);const q=Q[h.t];if(!q){priced=false;continue;}
-    if(q.src!=='nav'){day+=q.d*shares(h);continue;}
-    funds++; if(!fundD||q.bd>fundD) fundD=q.bd;
-    if(fundToday(q)){ const x=q.d*shares(h); day+=x; fundDay+=x; fundIn=true; } }
-  return {inv,cost,day,total:inv+S.cash,gain:inv-cost,priced,fund:funds?{day:fundDay,in:fundIn,d:fundD}:null};
+  // the day change is stocks only; funds have their own once-a-day change, shown in their own section
+  let inv=0,cost=0,day=0,priced=true,funds=0;
+  for(const h of S.holdings){inv+=value(h);cost+=basis(h);if(isFund(h.t)){funds++;continue;}const q=Q[h.t];if(q)day+=q.d*shares(h);else priced=false;}
+  return {inv,cost,day,total:inv+S.cash,gain:inv-cost,priced,funds};
 }
 
 /* ===================================================================
@@ -649,6 +651,9 @@ async function fetchQuotesAlpaca(syms){
 }
 const fundToday=q=>q.src==='nav'&&q.bd===today();   // a fund's NAV move belongs to today
 const navDate=d=>{const [,m,x]=d.split('-');return +m+'/'+ +x;};   // 2026-10-27 -> 10/27
+const navLabel=d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short'})+' '+navDate(d)+' close';   // Tue 10/27 close
+const FUNDS_NOTE='price once a day, after the 4 PM close';
+const byKind=hs=>[...hs.filter(h=>!isFund(h.t)),...hs.filter(h=>isFund(h.t))];
 function lastSession(){
   // the most recent trading day whose 4 PM close has passed
   const p=etParts(new Date()); let dt=new Date(p.d+'T12:00:00Z');
@@ -756,7 +761,7 @@ function extInfo(){
     const sday=closed?(q.bd||d):d;                  // date of the session the close belongs to
     if(!sessionDate)sessionDate=sday;
     let ref, prev, traded;
-    if(q.src==='nav'){ ref=q.c; prev=q.bd===lastSession()?q.pc:q.c; traded=false; }   // fund: its NAV move is part of the session it belongs to
+    if(q.src==='nav'){ ref=q.c; prev=q.c; traded=false; }   // funds aren't part of session or extended-hours moves
     else if(pre){ ref=q.pc; prev=q.ppc; traded=qt&&qt.d===d&&qt.m<570; }
     else{
       if(barToday){ ref=q.rc; prev=q.pc; }
@@ -819,6 +824,7 @@ const COLORS=['#2d3a8c','#2a7fb8','#c67c1e','#7a4ea3','#b83c33','#3a8a6e','#5b6f
 function render(){
   const T=totals(), st=marketStatus();
   $('#hTotal').textContent=money(T.total);
+  $('#hDayLbl').textContent=T.funds?'Stocks today':'Today';
   const d=$('#hDay'); d.textContent=T.priced?`${signed(T.day)} (${pct(dayPct(T))})`:'—'; d.className='num '+cls(T.day);
   const g=$('#hGain'); g.textContent=`${signed(T.gain)} (${pct(T.cost?T.gain/T.cost*100:0)})`; g.className='num '+cls(T.gain);
   $('#hCash').textContent=money(S.cash);
@@ -837,10 +843,13 @@ function render(){
 function renderHome(T){
   const st=marketStatus(), ext=extInfo();
   const rows=S.holdings.map(h=>({h,q:Q[h.t],v:value(h)})).sort((a,b)=>b.v-a.v);
+  const fundRows=rows.filter(r=>isFund(r.h.t)), stockRows=rows.filter(r=>!isFund(r.h.t));
   let html=`<div class="hhead"><span>Holding</span><span>Last</span><span>Today</span><span>Value</span><span>Wt</span></div>`;
-  for(const {h,q,v} of rows){
+  for(const {h,q,v} of [...stockRows,...fundRows]){
+    if(fundRows.length&&h===fundRows[0].h) html+=`<div class="hsec">Funds <span>· ${FUNDS_NOTE}</span></div>`;
+    else if(fundRows.length&&stockRows.length&&h===stockRows[0].h) html+=`<div class="hsec">Stocks</div>`;
     const sh=shares(h), gain=v-basis(h);
-    const extRow=ext&&ext.rows.find(r=>r.t===h.t), extTag=q&&q.src==='nav'?`<span class="sub" title="Mutual fund: one price a day, published after the close" style="white-space:nowrap">NAV ${navDate(q.bd)}</span>`:extRow&&extRow.traded?`<span class="sub ${cls(extRow.chg)}">${st.k==='closed'?'AH':(ext.pre?'pre':'AH')} ${pct(extRow.pct)}</span>`:'';
+    const extRow=ext&&ext.rows.find(r=>r.t===h.t), extTag=q&&q.src==='nav'?`<span class="sub" style="white-space:nowrap">${navLabel(q.bd)}</span>`:extRow&&extRow.traded?`<span class="sub ${cls(extRow.chg)}">${st.k==='closed'?'AH':(ext.pre?'pre':'AH')} ${pct(extRow.pct)}</span>`:'';
     html+=`<button class="hrow" onclick="openDetail('${h.t}')">
       <span class="sym">${esc(h.t)}<small>${esc(h.name||'')}</small></span>
       <span><b class="num">${q?money(q.c):'—'}</b>${extTag}</span>
@@ -854,8 +863,7 @@ function renderHome(T){
   $('#homeAlloc').innerHTML=items.map((i,k)=>`<i style="width:${i.v/tot*100}%;background:${COLORS[(k)%COLORS.length]}" title="${i.n} ${fmt(i.v/tot*100,1)}%"></i>`).join('');
   const watching=S.alerts.filter(a=>a.t.startsWith('step')||!a.fired).length, fired=S.alerts.filter(a=>a.fired).length;
   const monthly=S.plan.contribs.reduce((a,c)=>a+c.amt*FREQ[c.freq].pm,0);
-  const fn=T.fund?(T.fund.in?` <span class="muted">incl. funds <span class="${cls(T.fund.day)}">${signed(T.fund.day)}</span> (NAV ${navDate(T.fund.d)})</span>`:` <span class="muted">excl. funds (NAV ${navDate(T.fund.d)})</span>`):'';
-  $('#homeFoot').innerHTML=`<span>Today <b class="num ${cls(T.day)}">${T.priced?signed(T.day):'—'}</b>${T.priced?fn:''}</span><span>Cost basis <b class="num">${money(T.cost,0)}</b></span>${monthly?`<span>Investing <b class="num">${money(monthly,0)}/mo</b></span>`:''}<span>Alerts <b>${watching} watching</b>${fired?` · ${fired} fired`:''}</span>${$('#lastUpd').textContent?`<span class="muted">${esc($('#lastUpd').textContent)}</span>`:''}`;
+  $('#homeFoot').innerHTML=`<span>${T.funds?'Stocks today':'Today'} <b class="num ${cls(T.day)}">${T.priced?signed(T.day):'—'}</b></span><span>Cost basis <b class="num">${money(T.cost,0)}</b></span>${monthly?`<span>Investing <b class="num">${money(monthly,0)}/mo</b></span>`:''}<span>Alerts <b>${watching} watching</b>${fired?` · ${fired} fired`:''}</span>${$('#lastUpd').textContent?`<span class="muted">${esc($('#lastUpd').textContent)}</span>`:''}`;
   const missing=!hasKey()||!S.cfg.gistToken; $('#homeSetup').style.display=missing&&!S.holdings.length?'':'none'; $('#homeSetupText').textContent=$('#setupText').textContent;
   document.body.classList.toggle('mobile',isMobile());
 }
@@ -866,16 +874,17 @@ function rangeHTML(h){
   return `<span class="range"><span class="bar"><i style="left:${x}%"></i></span><span class="ends num"><span>${fmt(m.lo)}</span><span>${fmt(m.hi)}</span></span></span>`;
 }
 function renderTable(T){
-  const tb=$('#tbl'); const hs=S.holdings;
+  const tb=$('#tbl'); const hs=byKind(S.holdings), mixed=hs.some(h=>isFund(h.t));
   $('#emptyHold').style.display=hs.length?'none':'';
   if(!hs.length){tb.innerHTML='';return;}
   let html=`<thead><tr><th>Symbol</th><th>Last</th><th>Day gain</th><th>Total gain</th><th>Value</th><th>Shares</th><th>Cost</th><th>52-wk range</th><th></th></tr></thead><tbody>`;
   html+=`<tr><td><div class="sym">Cash</div><div class="nm">Money market</div></td><td colspan="3"></td><td class="num">${money(S.cash)}<div class="sub">${fmt(T.total?S.cash/T.total*100:0)}%</div></td><td colspan="3"></td><td><span class="acts"><button class="btn sm" onclick="openCash()">Edit</button></span></td></tr>`;
   for(const h of hs){
     const q=Q[h.t], sh=shares(h), b=basis(h), v=value(h), gain=v-b, dayg=q?q.d*sh:null;
+    if(mixed&&h===hs.find(x=>isFund(x.t))) html+=`<tr class="sec"><td colspan="9">Funds <span>· ${FUNDS_NOTE}</span></td></tr>`;
     html+=`<tr>
       <td style="cursor:pointer" onclick="openDetail('${h.t}')"><div class="sym">${esc(h.t)} <span class="muted" style="font-weight:400;font-size:12px">›</span></div><div class="nm" title="${esc(h.name||'')}">${esc(h.name||'')}</div></td>
-      <td class="num">${q?money(q.c)+'<div class="sub '+cls(q.d)+'">'+signed(q.d)+(q.src==='nav'?' · NAV '+navDate(q.bd):'')+'</div>':'<span class="muted">—</span>'}</td>
+      <td class="num">${q?money(q.c)+'<div class="sub '+cls(q.d)+'">'+signed(q.d)+(q.src==='nav'?' · '+navLabel(q.bd):'')+'</div>':'<span class="muted">—</span>'}</td>
       <td class="num ${cls(dayg)}">${q?signed(dayg)+'<div class="sub">'+pct(q.dp)+'</div>':'—'}</td>
       <td class="num ${cls(gain)}">${q?signed(gain)+'<div class="sub">'+pct(b?gain/b*100:0)+'</div>':'—'}</td>
       <td class="num">${money(v)}<div class="sub">${fmt(T.total?v/T.total*100:0)}%</div></td>
@@ -886,7 +895,7 @@ function renderTable(T){
     </tr>`;
     if(openLots[h.t]) html+=`<tr class="lots"><td colspan="9">${lotsHTML(h)}</td></tr>`;
   }
-  html+=`<tr class="total"><td>Account total</td><td></td><td class="num ${cls(T.day)}">${T.priced?signed(T.day)+'<div class="sub">'+pct(dayPct(T))+'</div>':'—'}</td><td class="num ${cls(T.gain)}">${signed(T.gain)}<div class="sub">${pct(T.cost?T.gain/T.cost*100:0)}</div></td><td class="num">${money(T.total)}</td><td colspan="4"></td></tr></tbody>`;
+  html+=`<tr class="total"><td>Account total</td><td></td><td class="num ${cls(T.day)}">${T.priced?signed(T.day)+'<div class="sub">'+pct(dayPct(T))+(T.funds?' · stocks':'')+'</div>':'—'}</td><td class="num ${cls(T.gain)}">${signed(T.gain)}<div class="sub">${pct(T.cost?T.gain/T.cost*100:0)}</div></td><td class="num">${money(T.total)}</td><td colspan="4"></td></tr></tbody>`;
   tb.innerHTML=html;
 }
 function lotsHTML(h){
@@ -901,14 +910,15 @@ function lotsHTML(h){
 function toggleLots(t){openLots[t]=!openLots[t];render();}
 
 function renderCards(T){
-  const c=$('#cards'); const hs=S.holdings;
+  const c=$('#cards'); const hs=byKind(S.holdings), mixed=hs.some(h=>isFund(h.t));
   let html=`<div class="hcard"><div class="top"><div><div class="sym">Cash</div><div class="nm">Money market</div></div><div class="big num">${money(S.cash)}</div></div><div class="kv"><span>Weight</span><b class="num">${fmt(T.total?S.cash/T.total*100:0)}%</b></div><span class="acts"><button class="btn sm" onclick="openCash()">Edit</button></span></div>`;
   for(const h of hs){
     const q=Q[h.t], sh=shares(h), b=basis(h), v=value(h), gain=v-b, dayg=q?q.d*sh:null;
+    if(mixed&&h===hs.find(x=>isFund(x.t))) html+=`<div class="hsec" style="border:0;padding:8px 2px 6px">Funds <span>· ${FUNDS_NOTE}</span></div>`;
     html+=`<div class="hcard">
-      <div class="top"><div onclick="openDetail('${h.t}')" style="cursor:pointer"><div class="sym">${esc(h.t)} <span class="muted" style="font-weight:400;font-size:13px">›</span></div><div class="nm">${esc(h.name||'')}</div></div><div style="text-align:right"><div class="big num">${money(v)}</div><div class="num ${cls(dayg)}" style="font-size:13px">${q?signed(dayg)+(q.src==='nav'&&!fundToday(q)?' on '+navDate(q.bd):' today')+' ('+pct(q.dp)+')':'no quote'}</div></div></div>
+      <div class="top"><div onclick="openDetail('${h.t}')" style="cursor:pointer"><div class="sym">${esc(h.t)} <span class="muted" style="font-weight:400;font-size:13px">›</span></div><div class="nm">${esc(h.name||'')}</div></div><div style="text-align:right"><div class="big num">${money(v)}</div><div class="num ${cls(dayg)}" style="font-size:13px">${q?signed(dayg)+(q.src==='nav'?' · '+navLabel(q.bd):' today')+' ('+pct(q.dp)+')':'no quote'}</div></div></div>
       <div class="kv">
-        <span>Last</span><b class="num">${q?money(q.c)+' ('+signed(q.d)+')'+(q.src==='nav'?' NAV '+navDate(q.bd):''):'—'}</b>
+        <span>Last</span><b class="num">${q?money(q.c)+' ('+signed(q.d)+')'+(q.src==='nav'?' · '+navLabel(q.bd):''):'—'}</b>
         <span>Total gain</span><b class="num ${cls(gain)}">${q?signed(gain)+' ('+pct(b?gain/b*100:0)+')':'—'}</b>
         <span>Shares</span><b class="num">${fmt(sh,3)}</b>
         <span>Avg cost</span><b class="num">${money(b/sh)}</b>
@@ -1058,13 +1068,13 @@ async function renderDetail(){
   $('#detailHost').innerHTML=`<div class="sheet" id="sheet">
     <div class="bar"><button class="back" onclick="history.back()" aria-label="Back">‹</button>
       <div class="t"><b>${esc(t)}</b><small>${esc(h.name||'')}</small></div>
-      <div class="px"><b class="num">${q?money(q.c):'—'}</b><span class="num ${q?cls(q.d):''}">${q?signed(q.d)+' ('+pct(q.dp)+')'+(q.src==='nav'?' · NAV '+navDate(q.bd):''):''}</span>${er&&er.traded?`<span class="num ${cls(er.chg)}" style="display:block;font-size:12px">${ext.pre?'pre-market':'after hours'} ${money(er.c)} · ${pct(er.pct)}</span>`:''}</div></div>
+      <div class="px"><b class="num">${q?money(q.c):'—'}</b><span class="num ${q?cls(q.d):''}">${q?signed(q.d)+' ('+pct(q.dp)+')'+(q.src==='nav'?' · '+navLabel(q.bd):''):''}</span>${er&&er.traded?`<span class="num ${cls(er.chg)}" style="display:block;font-size:12px">${ext.pre?'pre-market':'after hours'} ${money(er.c)} · ${pct(er.pct)}</span>`:''}</div></div>
     <div class="body">
       <div class="row" style="margin-bottom:12px"><button class="btn primary" onclick="openTrade('${t}','buy')">Buy more</button><button class="btn" onclick="openTrade('${t}','sell')">Sell</button><button class="btn" onclick="closeDetail();showTab('alerts');$('#aSym').value='${t}'">Add alert</button></div>
       <div class="kv6">
         <div><div class="k">Value</div><div class="v num">${money(v)}</div><div class="s num">${fmt(T.total?v/T.total*100:0,1)}% of account</div></div>
         <div><div class="k">Total gain</div><div class="v num ${cls(gain)}">${signed(gain)}</div><div class="s num ${cls(gain)}">${pct(b?gain/b*100:0)}</div></div>
-        <div><div class="k">${q&&q.src==='nav'&&!fundToday(q)?'NAV '+navDate(q.bd):'Today'}</div><div class="v num ${q?cls(q.d):''}">${q?signed(q.d*sh):'—'}</div><div class="s num">${q?pct(q.dp):''}</div></div>
+        <div><div class="k">${q&&q.src==='nav'?navLabel(q.bd).replace(' close',''):'Today'}</div><div class="v num ${q?cls(q.d):''}">${q?signed(q.d*sh):'—'}</div><div class="s num">${q?pct(q.dp):''}</div></div>
         <div><div class="k">Shares</div><div class="v num">${fmt(sh,3)}</div><div class="s">${lots.length} lot${lots.length>1?'s':''}</div></div>
         <div><div class="k">Avg cost</div><div class="v num">${money(avg)}</div><div class="s num">${q?(q.c>=avg?'price is '+pct((q.c-avg)/avg*100)+' above':'price is '+pct((q.c-avg)/avg*100)+' below'):''}</div></div>
         <div><div class="k">Cost basis</div><div class="v num">${money(b)}</div><div class="s">${lots[0]?'since '+lots[0].d:''}</div></div>
