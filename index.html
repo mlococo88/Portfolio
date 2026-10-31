@@ -661,6 +661,13 @@ async function fetchQuotesAlpaca(syms){
       const m=etParts(new Date()).m, sipFinal=m>=976||m<240;          // delayed feed's daily bar is final from 4:16 PM
       if(sipFinal&&cc.rc!=null) q.rc=cc.rc; else if(a&&a.rc!=null) q.rc=a.rc; else if(cc.rc!=null) q.rc=cc.rc;
       q.d=q.c-q.pc; q.dp=q.pc?q.d/q.pc*100:0; }
+    // Outside the regular session, a stock whose latest trade was inside regular hours (no pre-market or
+    // after-hours trade since) is shown at its official close, not at a last trade a few cents off it.
+    if(q&&st.k!=='open'){
+      const qt=q.t?etParts(new Date(q.t*1000)):null, ext=qt&&(qt.m<570||qt.m>960);   // same test the after-hours panel uses
+      const close=q.rc!=null?q.rc:(q.bd!==d?q.pc:null);
+      if(!ext&&close!=null){ q.c=close; q.d=q.c-q.pc; q.dp=q.pc?q.d/q.pc*100:0; q.src='close'; }
+    }
     if(q) Q[s]=q;
   }
   try{sessionStorage.setItem('ledger.pcc',JSON.stringify(PCC));}catch(e){}
