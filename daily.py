@@ -87,14 +87,25 @@ syms = ",".join(h["t"] for h in holdings if h["t"] not in NAV and not re.fullmat
 ODD_PRINTS = set("WBCNRPZU479HMQVG")
 
 
+def in_sessions(iso):
+    """True for a time inside a trading day's 4 AM - 8 PM ET sessions. Overnight and weekend trades are thin
+    off-exchange prints (e.g. MSFT at $445 at 1 AM after a $521.91 close) and not a usable price."""
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ET)
+    return t.weekday() < 5 and t.strftime("%Y-%m-%d") not in HOLIDAYS and 240 <= t.hour * 60 + t.minute < 1200
+
+
 def last_price(snap):
-    """Latest trade as {"p", "t"}, or the last minute bar (regular trades only) when that trade is a special
-    print or more than 3% away from it."""
-    lt, mb = (snap or {}).get("latestTrade"), (snap or {}).get("minuteBar")
+    """Latest trade as {"p", "t"}; the last minute bar (regular trades only) when that trade is a special print,
+    more than 3% away from it, or from outside the sessions; else the daily close."""
+    snap = snap or {}
+    lt, mb = snap.get("latestTrade"), snap.get("minuteBar")
     if not lt: return None
-    if mb and mb.get("c") and (set(lt.get("c") or []) & ODD_PRINTS or abs(lt["p"] - mb["c"]) / mb["c"] > 0.03):
-        return {"p": mb["c"], "t": mb["t"]}
-    return {"p": lt["p"], "t": lt["t"]}
+    mb = mb if mb and mb.get("c") and in_sessions(mb["t"]) else None
+    if in_sessions(lt["t"]) and not (mb and (set(lt.get("c") or []) & ODD_PRINTS or abs(lt["p"] - mb["c"]) / mb["c"] > 0.03)):
+        return {"p": lt["p"], "t": lt["t"]}
+    if mb: return {"p": mb["c"], "t": mb["t"]}
+    b = snap.get("dailyBar") or snap.get("prevDailyBar")
+    return {"p": b["c"], "t": b["t"]} if b else None
 
 
 def snapshots(feed):
