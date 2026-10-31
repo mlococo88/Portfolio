@@ -106,6 +106,21 @@ syms = ",".join(h["t"] for h in holdings if h["t"] not in NAV and not re.fullmat
 open_session = 570 <= minutes < 960
 
 
+# Trade conditions that don't reflect the current market: average-price, prior-reference-price, out-of-sequence,
+# derivatively priced, contingent, cash/next-day/seller trades and official open/close reprints.
+ODD_PRINTS = set("WBCNRPZU479HMQVG")
+
+
+def last_price(snap):
+    """Latest trade as {"p", "t"}, or the last minute bar (regular trades only) when that trade is a special
+    print or more than 3% away from it."""
+    lt, mb = (snap or {}).get("latestTrade"), (snap or {}).get("minuteBar")
+    if not lt: return None
+    if mb and mb.get("c") and (set(lt.get("c") or []) & ODD_PRINTS or abs(lt["p"] - mb["c"]) / mb["c"] > 0.03):
+        return {"p": mb["c"], "t": mb["t"]}
+    return {"p": lt["p"], "t": lt["t"]}
+
+
 def snapshots(feed):
     if not syms: return {}
     try:
@@ -123,9 +138,9 @@ for h in holdings:
     s = h["t"]
     best = None
     for src in (iex.get(s), sip.get(s)):
-        if not src or not src.get("latestTrade"):
+        lt = last_price(src)
+        if not lt:
             continue
-        lt = src["latestTrade"]
         t = datetime.fromisoformat(lt["t"].replace("Z", "+00:00"))
         db, pdb = src.get("dailyBar"), src.get("prevDailyBar")
         if db and datetime.fromisoformat(db["t"].replace("Z", "+00:00")).astimezone(ET).strftime("%Y-%m-%d") == today:
