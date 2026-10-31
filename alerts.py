@@ -23,6 +23,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
+HOLIDAYS = {"2026-01-01","2026-01-19","2026-02-16","2026-04-03","2026-05-25","2026-06-19","2026-07-03","2026-09-07","2026-11-26","2026-12-25",
+            "2027-01-01","2027-01-18","2027-02-15","2027-03-26","2027-05-31","2027-06-18","2027-07-05","2027-09-06","2027-11-25","2027-12-24"}
 GH = "https://api.github.com"
 
 
@@ -111,14 +113,25 @@ open_session = 570 <= minutes < 960
 ODD_PRINTS = set("WBCNRPZU479HMQVG")
 
 
+def in_sessions(iso):
+    """True for a time inside a trading day's 4 AM - 8 PM ET sessions. Overnight and weekend trades are thin
+    off-exchange prints (e.g. MSFT at $445 at 1 AM after a $521.91 close) and not a usable price."""
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ET)
+    return t.weekday() < 5 and t.strftime("%Y-%m-%d") not in HOLIDAYS and 240 <= t.hour * 60 + t.minute < 1200
+
+
 def last_price(snap):
-    """Latest trade as {"p", "t"}, or the last minute bar (regular trades only) when that trade is a special
-    print or more than 3% away from it."""
-    lt, mb = (snap or {}).get("latestTrade"), (snap or {}).get("minuteBar")
+    """Latest trade as {"p", "t"}; the last minute bar (regular trades only) when that trade is a special print,
+    more than 3% away from it, or from outside the sessions; else the daily close."""
+    snap = snap or {}
+    lt, mb = snap.get("latestTrade"), snap.get("minuteBar")
     if not lt: return None
-    if mb and mb.get("c") and (set(lt.get("c") or []) & ODD_PRINTS or abs(lt["p"] - mb["c"]) / mb["c"] > 0.03):
-        return {"p": mb["c"], "t": mb["t"]}
-    return {"p": lt["p"], "t": lt["t"]}
+    mb = mb if mb and mb.get("c") and in_sessions(mb["t"]) else None
+    if in_sessions(lt["t"]) and not (mb and (set(lt.get("c") or []) & ODD_PRINTS or abs(lt["p"] - mb["c"]) / mb["c"] > 0.03)):
+        return {"p": lt["p"], "t": lt["t"]}
+    if mb: return {"p": mb["c"], "t": mb["t"]}
+    b = snap.get("dailyBar") or snap.get("prevDailyBar")
+    return {"p": b["c"], "t": b["t"]} if b else None
 
 
 def snapshots(feed):

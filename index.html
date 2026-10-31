@@ -619,15 +619,22 @@ async function fetchQuotesFinnhub(syms){
 // derivatively priced, contingent, cash/next-day/seller trades and official open/close reprints.
 const ODD_PRINTS=new Set(['W','B','C','N','R','P','Z','U','4','7','9','H','M','Q','V','G']);
 const off=(a,b)=>Math.abs(a-b)/b>0.03;
+// Only prices from a trading day's 4 AM–8 PM ET sessions count. Overnight and weekend trades (thin off-exchange
+// trading, e.g. MSFT at $445 at 1 AM after a $521.91 close) are not a usable price.
+function inSessions(sec){ const p=etParts(new Date(sec*1000)), w=new Date(p.d+'T12:00:00Z').getUTCDay(); return w>0&&w<6&&!HOLIDAYS.has(p.d)&&p.m>=240&&p.m<1200; }
 function parseSnap(x,d){
   if(!x||!x.latestTrade) return null;
   const lt=x.latestTrade, mb=x.minuteBar, sec=s=>Math.floor(Date.parse(s)/1000);
   let c=lt.p, t=sec(lt.t), src='trade';
   // the last minute bar is built from regular trades only; use it when the last trade is a special print or far from it
-  if(mb&&mb.c>0&&((lt.c||[]).some(k=>ODD_PRINTS.has(k))||off(c,mb.c))){ c=mb.c; t=sec(mb.t)+59; src='bar'; }
+  const mbOk=mb&&mb.c>0&&inSessions(sec(mb.t));
+  if(mbOk&&((lt.c||[]).some(k=>ODD_PRINTS.has(k))||off(c,mb.c))){ c=mb.c; t=sec(mb.t)+59; src='bar'; }
+  if(!inSessions(t)){   // overnight print: fall back to the session's minute bar, else the daily close (t=0 lets the other feed win)
+    if(mbOk){ c=mb.c; t=sec(mb.t)+59; src='bar'; }
+    else { const b=x.dailyBar||x.prevDailyBar; if(b) c=b.c; t=0; src='close'; } }
   const lq=x.latestQuote;
   if(marketStatus().k!=='closed'&&lq&&lq.bp>0&&lq.ap>0){ const qt=sec(lq.t), mid=Math.round((lq.bp+lq.ap)*50)/100;   // no quotes while the market is shut
-    if(qt>t+60&&(lq.ap-lq.bp)/lq.ap<0.01&&!(mb&&mb.c>0&&off(mid,mb.c))){ c=mid; t=qt; src='quote'; } }
+    if(qt>t+60&&inSessions(qt)&&(lq.ap-lq.bp)/lq.ap<0.01&&!(mb&&mb.c>0&&off(mid,mb.c))){ c=mid; t=qt; src='quote'; } }
   const db=x.dailyBar, pdb=x.prevDailyBar;
   let pc=null, rc=null, ppc=null, bd=db?etParts(new Date(db.t)).d:null;
   if(db&&bd===d){ pc=pdb?pdb.c:null; rc=db.c; }
