@@ -82,6 +82,21 @@ a_headers = {"APCA-API-KEY-ID": env("ALPACA_KEY"), "APCA-API-SECRET-KEY": env("A
 syms = ",".join(h["t"] for h in holdings if h["t"] not in NAV and not re.fullmatch(r"[A-Z]{4}X", h["t"]))
 
 
+# Trade conditions that don't reflect the current market: average-price, prior-reference-price, out-of-sequence,
+# derivatively priced, contingent, cash/next-day/seller trades and official open/close reprints.
+ODD_PRINTS = set("WBCNRPZU479HMQVG")
+
+
+def last_price(snap):
+    """Latest trade as {"p", "t"}, or the last minute bar (regular trades only) when that trade is a special
+    print or more than 3% away from it."""
+    lt, mb = (snap or {}).get("latestTrade"), (snap or {}).get("minuteBar")
+    if not lt: return None
+    if mb and mb.get("c") and (set(lt.get("c") or []) & ODD_PRINTS or abs(lt["p"] - mb["c"]) / mb["c"] > 0.03):
+        return {"p": mb["c"], "t": mb["t"]}
+    return {"p": lt["p"], "t": lt["t"]}
+
+
 def snapshots(feed):
     if not syms: return {}
     try:
@@ -112,7 +127,7 @@ for h in holdings:
     # after-hours: freshest trade after 4 PM from either feed
     ah = None
     for src in (sip.get(s), iex.get(s)):
-        lt = (src or {}).get("latestTrade")
+        lt = last_price(src)
         if not lt: continue
         t = datetime.fromisoformat(lt["t"].replace("Z", "+00:00")).astimezone(ET)
         if t.strftime("%Y-%m-%d") == today and t.hour * 60 + t.minute > 960 and (ah is None or t > ah["t"]):

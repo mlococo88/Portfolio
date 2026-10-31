@@ -615,11 +615,19 @@ async function fetchQuotesFinnhub(syms){
   const res=await Promise.all(syms.map(s=>fq('quote?symbol='+encodeURIComponent(s))));
   res.forEach((q,i)=>{ if(q&&q.c) Q[syms[i]]={c:q.c,pc:q.pc,d:q.d??(q.c-q.pc),dp:q.dp??((q.c-q.pc)/q.pc*100),t:q.t,rc:null}; });
 }
+// Trade conditions that don't reflect the current market: average-price, prior-reference-price, out-of-sequence,
+// derivatively priced, contingent, cash/next-day/seller trades and official open/close reprints.
+const ODD_PRINTS=new Set(['W','B','C','N','R','P','Z','U','4','7','9','H','M','Q','V','G']);
+const off=(a,b)=>Math.abs(a-b)/b>0.03;
 function parseSnap(x,d){
   if(!x||!x.latestTrade) return null;
-  let c=x.latestTrade.p, t=Math.floor(Date.parse(x.latestTrade.t)/1000), src='trade';
+  const lt=x.latestTrade, mb=x.minuteBar, sec=s=>Math.floor(Date.parse(s)/1000);
+  let c=lt.p, t=sec(lt.t), src='trade';
+  // the last minute bar is built from regular trades only; use it when the last trade is a special print or far from it
+  if(mb&&mb.c>0&&((lt.c||[]).some(k=>ODD_PRINTS.has(k))||off(c,mb.c))){ c=mb.c; t=sec(mb.t)+59; src='bar'; }
   const lq=x.latestQuote;
-  if(lq&&lq.bp>0&&lq.ap>0){ const qt=Math.floor(Date.parse(lq.t)/1000); if(qt>t+60&&(lq.ap-lq.bp)/lq.ap<0.01){ c=Math.round((lq.bp+lq.ap)*50)/100; t=qt; src='quote'; } }
+  if(marketStatus().k!=='closed'&&lq&&lq.bp>0&&lq.ap>0){ const qt=sec(lq.t), mid=Math.round((lq.bp+lq.ap)*50)/100;   // no quotes while the market is shut
+    if(qt>t+60&&(lq.ap-lq.bp)/lq.ap<0.01&&!(mb&&mb.c>0&&off(mid,mb.c))){ c=mid; t=qt; src='quote'; } }
   const db=x.dailyBar, pdb=x.prevDailyBar;
   let pc=null, rc=null, ppc=null, bd=db?etParts(new Date(db.t)).d:null;
   if(db&&bd===d){ pc=pdb?pdb.c:null; rc=db.c; }
@@ -790,7 +798,8 @@ function extInfo(){
   if(!sessionDate) sessionDate=ls;
   return {pre,closed,sessionDate,funds,fundChg,fundPct:fundBase?fundChg/fundBase*100:0,fundPending,stockPct:stockBase?regChg/stockBase*100:0,
           sumChg:regChg+fundChg,sumPct:prior?(regChg+fundChg)/prior*100:0,extChg,extPct:base+S.cash?extChg/(base+S.cash)*100:0,regClose:base+S.cash,regChg,regPct:base+S.cash-regChg?regChg/(base+S.cash-regChg)*100:0,haveReg,
-          closeGain:base-T.cost,cost:T.cost,total:T.total,gain:T.gain,haveAll,anyExt,rows};
+          closeGain:base-T.cost,cost:T.cost,total:base+S.cash+extChg,gain:base-T.cost+extChg,   // close + extended-hours move, so the two panels always agree
+          haveAll,anyExt,rows};
 }
 function fmtWhen(unix){ const dt=new Date(unix*1000), sameDay=etParts(dt).d===today();
   return dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+(sameDay?'':' '+dt.toLocaleDateString([],{month:'short',day:'numeric'})); }
